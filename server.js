@@ -7,8 +7,36 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Habilitar CORS para TODOS los orígenes (como lo dejamos)
-app.use(cors());
+// ===================================================================
+//  INICIO DE LA MODIFICACIÓN 1: Configuración de CORS
+//  Reemplaza tu app.use(cors()); con este bloque.
+// ===================================================================
+// Lista de orígenes permitidos
+const allowedOrigins = [
+  'http://127.0.0.1:2008', // Tu frontend local
+  'http://localhost:2008', // Otra variación local
+  // 'https://tu-pwa-en-produccion.vercel.app' // <-- DEBES AÑADIR TU URL DE PRODUCCIÓN AQUÍ
+];
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Permitir peticiones sin 'origin' (como Postman) o si está en la lista blanca
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.error(`Origen no permitido por CORS: ${origin}`);
+      callback(new Error('No permitido por CORS'));
+    }
+  },
+  optionsSuccessStatus: 200 // Para navegadores antiguos y pre-flight
+};
+
+// Habilitar CORS con opciones
+// IMPORTANTE: Esto debe ir ANTES de app.use(bodyParser.json()) y tus rutas.
+app.use(cors(corsOptions));
+// ===================================================================
+//  FIN DE LA MODIFICACIÓN 1
+// ===================================================================
 
 app.use(bodyParser.json());
 
@@ -135,13 +163,18 @@ app.post('/api/push/notify-new-hire', async (req, res) => {
         console.log('No se proporcionó chapa_target. Enviando a TODOS los suscriptores.');
     }
 
-    // --- INICIO DE LA MODIFICACIÓN ---
+    // ===================================================================
+    //  INICIO DE LA MODIFICACIÓN 2: Payload de Notificación
+    //  Añadimos el hash a la URL para la redirección de la PWA.
+    // ===================================================================
     const payload = JSON.stringify({
         title: title || '¡Nueva Contratación Disponible!',
-        body: body || 'Revisa los detalles de la última incorporación a nuestro equipo.',
+        body: body || 'Revisa los detalles de la última incorporación.',
         url: url || '/#contratacion', // <-- ¡CAMBIADO! Añade el hash
     });
-    // --- FIN DE LA MODIFICACIÓN ---
+    // ===================================================================
+    //  FIN DE LA MODIFICACIÓN 2
+    // ===================================================================
 
     console.log(`Enviando notificación a ${targetSubscriptions.length} suscriptores persistentes...`);
 
