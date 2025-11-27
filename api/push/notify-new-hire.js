@@ -32,9 +32,9 @@ module.exports = async (req, res) => {
 
         console.log(`📨 Notificación nueva contratación para chapa: ${chapa_target || 'TODOS'}`);
 
-        // Obtener suscripciones de la tabla push_notifications
+        // Obtener suscripciones de la tabla push_subscriptions
         let { data: subscriptions, error } = await supabase
-            .from('push_notifications')
+            .from('push_subscriptions')
             .select('*');
 
         if (error) {
@@ -91,7 +91,7 @@ module.exports = async (req, res) => {
                     // Si la suscripción está expirada, eliminarla
                     if (error.statusCode === 410 || error.statusCode === 404) {
                         await supabase
-                            .from('push_notifications')
+                            .from('push_subscriptions')
                             .delete()
                             .eq('endpoint', sub.endpoint);
                         console.log(`🗑️ Suscripción expirada eliminada: ${sub.user_chapa}`);

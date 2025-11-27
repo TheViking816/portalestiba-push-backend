@@ -38,7 +38,7 @@ module.exports = async (req, res) => {
 
         // Obtener suscripción del usuario específico
         const { data: subscriptions, error } = await supabase
-            .from('push_notifications')
+            .from('push_subscriptions')
             .select('*')
             .eq('user_chapa', chapa_target.toString());
 
@@ -90,7 +90,7 @@ module.exports = async (req, res) => {
             // Si la suscripción está expirada, eliminarla
             if (pushError.statusCode === 410 || pushError.statusCode === 404) {
                 await supabase
-                    .from('push_notifications')
+                    .from('push_subscriptions')
                     .delete()
                     .eq('endpoint', subscription.endpoint);
                 console.log(`🗑️ Suscripción expirada eliminada para chapa ${chapa_target}`);
