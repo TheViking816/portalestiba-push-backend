@@ -85,7 +85,10 @@ module.exports = async (req, res) => {
             });
 
         } catch (pushError) {
-            console.error(`❌ Error enviando notificación a chapa ${chapa_target}:`, pushError.message);
+            console.error(`❌ Error enviando notificación a chapa ${chapa_target}:`);
+            console.error(`   Status: ${pushError.statusCode}`);
+            console.error(`   Message: ${pushError.message}`);
+            console.error(`   Body: ${pushError.body}`);
 
             // Si la suscripción está expirada, eliminarla
             if (pushError.statusCode === 410 || pushError.statusCode === 404) {
@@ -98,13 +101,16 @@ module.exports = async (req, res) => {
                 return res.status(200).json({
                     success: false,
                     message: 'Subscription expired and removed',
-                    removed: true
+                    removed: true,
+                    statusCode: pushError.statusCode
                 });
             }
 
             return res.status(500).json({
                 success: false,
-                error: pushError.message
+                error: pushError.message,
+                statusCode: pushError.statusCode,
+                details: pushError.body
             });
         }
 
