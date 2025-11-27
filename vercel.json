@@ -1,13 +1,18 @@
 {
+  "version": 2,
   "functions": {
     "api/**/*.js": {
       "maxDuration": 10
     }
   },
-  "rewrites": [
+  "routes": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
+      "src": "/api/push/notify-new-hire",
+      "dest": "/api/push/notify-new-hire.js"
+    },
+    {
+      "src": "/api/push/notify-oracle",
+      "dest": "/api/push/notify-oracle.js"
     }
   ]
 }
