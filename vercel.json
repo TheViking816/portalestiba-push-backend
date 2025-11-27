@@ -7,6 +7,10 @@
   },
   "routes": [
     {
+      "src": "/api/push/subscribe",
+      "dest": "/api/push/subscribe.js"
+    },
+    {
       "src": "/api/push/notify-new-hire",
       "dest": "/api/push/notify-new-hire.js"
     },
