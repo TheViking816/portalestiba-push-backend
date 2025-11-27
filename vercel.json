@@ -11,6 +11,10 @@
       "dest": "/api/push/subscribe.js"
     },
     {
+      "src": "/api/push/unsubscribe",
+      "dest": "/api/push/unsubscribe.js"
+    },
+    {
       "src": "/api/push/notify-new-hire",
       "dest": "/api/push/notify-new-hire.js"
     },
