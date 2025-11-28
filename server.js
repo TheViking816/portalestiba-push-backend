@@ -67,7 +67,7 @@ app.post('/api/push/subscribe', async (req, res) => {
                 endpoint: subscription.endpoint,
                 p256dh: subscription.keys.p256dh,
                 auth: subscription.keys.auth,
-                user_chapa: user_chapa
+                user_chapa: subscription.chapa
             }, {
                 onConflict: 'endpoint' 
             });
