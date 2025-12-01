@@ -1,126 +1,236 @@
+/**
+ * Endpoint para recibir webhooks de Stripe
+ * POST /api/stripe-webhook
+ */
+
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { createClient } = require('@supabase/supabase-js');
 
+// Cliente de Supabase
 const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+  process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-module.exports = async function handler(req, res) {
+module.exports = async (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
   let event;
 
   try {
-    // Vercel proporciona el raw body automáticamente en req.body cuando es Buffer
-    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
-
+    // Verificar la firma del webhook
     event = stripe.webhooks.constructEvent(
-      buf,
+      req.body,
       sig,
-      process.env.STRIPE_WEBHOOK_SECRET
+      webhookSecret
     );
-
-    console.log('✅ Webhook signature verified. Event type:', event.type);
   } catch (err) {
     console.error('❌ Webhook signature verification failed:', err.message);
-    return res.status(400).json({ error: `Webhook error: ${err.message}` });
+    return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Procesar evento
+  console.log('📥 Webhook event received:', event.type);
+
   try {
-    console.log('Processing event:', event.type);
-
+    // Procesar diferentes tipos de eventos
     switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object;
+        await handleCheckoutCompleted(session);
+        break;
+      }
+
       case 'customer.subscription.created':
-        console.log('📝 Subscription created');
-        await handleSubscriptionUpdate(event.data.object);
+      case 'customer.subscription.updated': {
+        const subscription = event.data.object;
+        await handleSubscriptionUpdate(subscription);
         break;
+      }
 
-      case 'customer.subscription.updated':
-        console.log('📝 Subscription updated');
-        await handleSubscriptionUpdate(event.data.object);
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object;
+        await handleSubscriptionCanceled(subscription);
         break;
+      }
 
-      case 'customer.subscription.deleted':
-        console.log('📝 Subscription deleted');
-        await handleSubscriptionCancelled(event.data.object);
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object;
+        await handleInvoicePaymentSucceeded(invoice);
         break;
+      }
 
-      case 'invoice.payment_succeeded':
-        console.log('💰 Payment succeeded');
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object;
+        await handleInvoicePaymentFailed(invoice);
         break;
-
-      case 'invoice.payment_failed':
-        console.log('❌ Payment failed');
-        break;
+      }
 
       default:
-        console.log(ℹ️ Unhandled event type:', event.type);
+        console.log(`ℹ️ Unhandled event type: ${event.type}`);
     }
 
-    return res.json({ received: true, event: event.type });
+    // Registrar webhook en la tabla stripe_webhooks si existe
+    try {
+      await supabase
+        .from('stripe_webhooks')
+        .insert({
+          stripe_event_id: event.id,
+          tipo_evento: event.type,
+          payload: event.data.object,
+          procesado: true,
+        });
+    } catch (err) {
+      console.log('ℹ️ No se pudo registrar webhook (tabla puede no existir):', err.message);
+    }
+
+    res.status(200).json({ received: true });
+
   } catch (error) {
     console.error('❌ Error processing webhook:', error);
-    return res.status(500).json({ error: error.message });
+
+    // Intentar registrar error
+    try {
+      await supabase
+        .from('stripe_webhooks')
+        .insert({
+          stripe_event_id: event.id,
+          tipo_evento: event.type,
+          payload: event.data.object,
+          procesado: false,
+          error: error.message,
+        });
+    } catch (err) {
+      console.log('ℹ️ No se pudo registrar error de webhook');
+    }
+
+    res.status(500).json({ error: error.message });
   }
 };
 
-async function handleSubscriptionUpdate(subscription) {
-  const chapa = subscription.metadata.chapa;
+/**
+ * Maneja cuando se completa un checkout
+ */
+async function handleCheckoutCompleted(session) {
+  console.log('✅ Checkout completed:', session.id);
+
+  const chapa = session.client_reference_id || session.metadata?.chapa;
 
   if (!chapa) {
-    console.error('❌ No chapa in subscription metadata');
-    throw new Error('No chapa in subscription metadata');
+    console.error('❌ No chapa found in session');
+    return;
   }
 
-  console.log('📊 Updating subscription for chapa:', chapa);
-  console.log('Status:', subscription.status);
-  console.log('Period:', new Date(subscription.current_period_start * 1000), 'to', new Date(subscription.current_period_end * 1000));
+  // Obtener la suscripción
+  const subscription = await stripe.subscriptions.retrieve(session.subscription);
 
-  const { data, error } = await supabase.from('usuarios_premium').upsert({
-    chapa,
-    stripe_customer_id: subscription.customer,
-    stripe_subscription_id: subscription.id,
-    plan_tipo: 'premium_mensual',
-    estado: subscription.status,
-    fecha_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
-    fecha_fin: new Date(subscription.current_period_end * 1000).toISOString(),
-    sueldometro_habilitado: true,
-    oraculo_habilitado: true,
-    chatbot_ia_habilitado: true
-  });
-
-  if (error) {
-    console.error('❌ Error updating Supabase:', error);
-    throw error;
-  }
-
-  console.log('✅ Successfully updated premium status for chapa:', chapa);
+  await updateUserPremium(chapa, subscription);
 }
 
-async function handleSubscriptionCancelled(subscription) {
-  const chapa = subscription.metadata.chapa;
+/**
+ * Maneja actualizaciones de suscripción
+ */
+async function handleSubscriptionUpdate(subscription) {
+  console.log('🔄 Subscription updated:', subscription.id);
+
+  const chapa = subscription.metadata?.chapa;
 
   if (!chapa) {
-    console.error('❌ No chapa in subscription metadata');
-    throw new Error('No chapa in subscription metadata');
+    console.error('❌ No chapa found in subscription metadata');
+    return;
   }
 
-  console.log('📊 Cancelling subscription for chapa:', chapa);
+  await updateUserPremium(chapa, subscription);
+}
 
-  const { data, error } = await supabase.from('usuarios_premium').update({
-    estado: 'cancelled',
-    fecha_cancelacion: new Date().toISOString()
-  }).eq('chapa', chapa);
+/**
+ * Maneja cancelación de suscripción
+ */
+async function handleSubscriptionCanceled(subscription) {
+  console.log('❌ Subscription canceled:', subscription.id);
 
-  if (error) {
-    console.error('❌ Error cancelling in Supabase:', error);
-    throw error;
+  const chapa = subscription.metadata?.chapa;
+
+  if (!chapa) {
+    console.error('❌ No chapa found in subscription metadata');
+    return;
   }
 
-  console.log('✅ Successfully cancelled subscription for chapa:', chapa);
+  await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+    p_chapa: chapa,
+    p_stripe_customer_id: subscription.customer,
+    p_stripe_subscription_id: subscription.id,
+    p_stripe_price_id: subscription.items.data[0].price.id,
+    p_estado: 'canceled',
+    p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
+    p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
+  });
+
+  console.log('✅ Usuario premium actualizado (cancelado):', chapa);
+}
+
+/**
+ * Maneja pago exitoso de factura
+ */
+async function handleInvoicePaymentSucceeded(invoice) {
+  console.log('💰 Invoice payment succeeded:', invoice.id);
+
+  if (!invoice.subscription) return;
+
+  const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+  const chapa = subscription.metadata?.chapa;
+
+  if (!chapa) return;
+
+  await updateUserPremium(chapa, subscription);
+}
+
+/**
+ * Maneja fallo de pago de factura
+ */
+async function handleInvoicePaymentFailed(invoice) {
+  console.log('❌ Invoice payment failed:', invoice.id);
+
+  if (!invoice.subscription) return;
+
+  const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+  const chapa = subscription.metadata?.chapa;
+
+  if (!chapa) return;
+
+  // Actualizar estado a 'past_due'
+  await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+    p_chapa: chapa,
+    p_stripe_customer_id: subscription.customer,
+    p_stripe_subscription_id: subscription.id,
+    p_stripe_price_id: subscription.items.data[0].price.id,
+    p_estado: 'past_due',
+    p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
+    p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
+  });
+
+  console.log('⚠️ Usuario premium actualizado (past_due):', chapa);
+}
+
+/**
+ * Actualiza el usuario premium en Supabase
+ */
+async function updateUserPremium(chapa, subscription) {
+  const estado = subscription.status; // 'active', 'trialing', 'past_due', 'canceled'
+
+  await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+    p_chapa: chapa,
+    p_stripe_customer_id: subscription.customer,
+    p_stripe_subscription_id: subscription.id,
+    p_stripe_price_id: subscription.items.data[0].price.id,
+    p_estado: estado,
+    p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
+    p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
+  });
+
+  console.log('✅ Usuario premium actualizado en Supabase:', chapa);
 }
