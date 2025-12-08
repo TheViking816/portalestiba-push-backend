@@ -21,16 +21,29 @@ module.exports = async (req, res) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   let event;
+  let body;
 
   try {
+    // En Vercel, req.body puede ser un objeto o un buffer
+    // Si es un objeto, convertirlo a string
+    if (typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+      body = JSON.stringify(req.body);
+    } else {
+      body = req.body;
+    }
+
+    console.log('📥 Webhook received, signature:', sig ? 'present' : 'missing');
+    console.log('📦 Body type:', typeof body, 'isBuffer:', Buffer.isBuffer(body));
+
     // Verificar la firma del webhook
     event = stripe.webhooks.constructEvent(
-      req.body,
+      body,
       sig,
       webhookSecret
     );
   } catch (err) {
     console.error('❌ Webhook signature verification failed:', err.message);
+    console.error('❌ Error details:', err);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
