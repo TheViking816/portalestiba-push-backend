@@ -4,29 +4,5 @@
     "api/**/*.js": {
       "maxDuration": 10
     }
-  },
-  "routes": [
-    {
-      "src": "/api/push/subscribe",
-      "dest": "/api/push/subscribe.js"
-    },
-    {
-      "src": "/api/push/unsubscribe",
-      "dest": "/api/push/unsubscribe.js"
-    },
-    {
-      "src": "/api/push/notify-new-hire",
-      "dest": "/api/push/notify-new-hire.js"
-    },
-    {
-      "src": "/api/push/notify-oracle",
-      "dest": "/api/push/notify-oracle.js"
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/stripe-webhook",
-      "destination": "/api/stripe-webhook.js"
-    }
-  ]
+  }
 }
