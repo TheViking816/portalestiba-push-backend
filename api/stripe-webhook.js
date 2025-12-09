@@ -1,6 +1,8 @@
 /**
  * Endpoint para recibir webhooks de Stripe
  * POST /api/stripe-webhook
+ *
+ * IMPORTANTE: Este endpoint necesita raw body para verificar la firma de Stripe
  */
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -12,6 +14,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// Configuración especial de Vercel para recibir raw body
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -21,19 +30,29 @@ module.exports = async (req, res) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   let event;
-  let body;
 
   try {
-    // En Vercel, req.body puede ser un objeto o un buffer
-    // Si es un objeto, convertirlo a string
-    if (typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
-      body = JSON.stringify(req.body);
-    } else {
-      body = req.body;
+    // Leer el raw body
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    const body = Buffer.concat(chunks);
+
+    console.log('📥 Webhook received');
+    console.log('🔑 Signature present:', !!sig);
+    console.log('📦 Body size:', body.length);
+    console.log('🔐 Webhook secret configured:', !!webhookSecret);
+
+    if (!sig) {
+      console.error('❌ No signature header found');
+      return res.status(400).send('No signature header');
     }
 
-    console.log('📥 Webhook received, signature:', sig ? 'present' : 'missing');
-    console.log('📦 Body type:', typeof body, 'isBuffer:', Buffer.isBuffer(body));
+    if (!webhookSecret) {
+      console.error('❌ STRIPE_WEBHOOK_SECRET not configured');
+      return res.status(500).send('Webhook secret not configured');
+    }
 
     // Verificar la firma del webhook
     event = stripe.webhooks.constructEvent(
@@ -41,13 +60,17 @@ module.exports = async (req, res) => {
       sig,
       webhookSecret
     );
+
+    console.log('✅ Signature verified, event type:', event.type);
+
   } catch (err) {
     console.error('❌ Webhook signature verification failed:', err.message);
-    console.error('❌ Error details:', err);
+    console.error('❌ Error type:', err.type);
+    console.error('❌ Full error:', err);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  console.log('📥 Webhook event received:', event.type);
+  console.log('📥 Processing webhook event:', event.type);
 
   try {
     // Procesar diferentes tipos de eventos
@@ -87,40 +110,12 @@ module.exports = async (req, res) => {
         console.log(`ℹ️ Unhandled event type: ${event.type}`);
     }
 
-    // Registrar webhook en la tabla stripe_webhooks si existe
-    try {
-      await supabase
-        .from('stripe_webhooks')
-        .insert({
-          stripe_event_id: event.id,
-          tipo_evento: event.type,
-          payload: event.data.object,
-          procesado: true,
-        });
-    } catch (err) {
-      console.log('ℹ️ No se pudo registrar webhook (tabla puede no existir):', err.message);
-    }
-
+    console.log('✅ Webhook processed successfully');
     res.status(200).json({ received: true });
 
   } catch (error) {
     console.error('❌ Error processing webhook:', error);
-
-    // Intentar registrar error
-    try {
-      await supabase
-        .from('stripe_webhooks')
-        .insert({
-          stripe_event_id: event.id,
-          tipo_evento: event.type,
-          payload: event.data.object,
-          procesado: false,
-          error: error.message,
-        });
-    } catch (err) {
-      console.log('ℹ️ No se pudo registrar error de webhook');
-    }
-
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({ error: error.message });
   }
 };
@@ -137,6 +132,8 @@ async function handleCheckoutCompleted(session) {
     console.error('❌ No chapa found in session');
     return;
   }
+
+  console.log('📋 Processing checkout for chapa:', chapa);
 
   // Obtener la suscripción
   const subscription = await stripe.subscriptions.retrieve(session.subscription);
@@ -157,6 +154,8 @@ async function handleSubscriptionUpdate(subscription) {
     return;
   }
 
+  console.log('📋 Updating subscription for chapa:', chapa);
+
   await updateUserPremium(chapa, subscription);
 }
 
@@ -173,7 +172,9 @@ async function handleSubscriptionCanceled(subscription) {
     return;
   }
 
-  await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+  console.log('📋 Canceling subscription for chapa:', chapa);
+
+  const { data, error } = await supabase.rpc('actualizar_suscripcion_desde_webhook', {
     p_chapa: chapa,
     p_stripe_customer_id: subscription.customer,
     p_stripe_subscription_id: subscription.id,
@@ -182,6 +183,11 @@ async function handleSubscriptionCanceled(subscription) {
     p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
     p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
   });
+
+  if (error) {
+    console.error('❌ Error updating Supabase:', error);
+    throw error;
+  }
 
   console.log('✅ Usuario premium actualizado (cancelado):', chapa);
 }
@@ -192,12 +198,20 @@ async function handleSubscriptionCanceled(subscription) {
 async function handleInvoicePaymentSucceeded(invoice) {
   console.log('💰 Invoice payment succeeded:', invoice.id);
 
-  if (!invoice.subscription) return;
+  if (!invoice.subscription) {
+    console.log('ℹ️ Invoice has no subscription, skipping');
+    return;
+  }
 
   const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
   const chapa = subscription.metadata?.chapa;
 
-  if (!chapa) return;
+  if (!chapa) {
+    console.error('❌ No chapa found in subscription metadata');
+    return;
+  }
+
+  console.log('📋 Processing invoice payment for chapa:', chapa);
 
   await updateUserPremium(chapa, subscription);
 }
@@ -208,15 +222,23 @@ async function handleInvoicePaymentSucceeded(invoice) {
 async function handleInvoicePaymentFailed(invoice) {
   console.log('❌ Invoice payment failed:', invoice.id);
 
-  if (!invoice.subscription) return;
+  if (!invoice.subscription) {
+    console.log('ℹ️ Invoice has no subscription, skipping');
+    return;
+  }
 
   const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
   const chapa = subscription.metadata?.chapa;
 
-  if (!chapa) return;
+  if (!chapa) {
+    console.error('❌ No chapa found in subscription metadata');
+    return;
+  }
+
+  console.log('📋 Marking subscription as past_due for chapa:', chapa);
 
   // Actualizar estado a 'past_due'
-  await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+  const { data, error } = await supabase.rpc('actualizar_suscripcion_desde_webhook', {
     p_chapa: chapa,
     p_stripe_customer_id: subscription.customer,
     p_stripe_subscription_id: subscription.id,
@@ -225,6 +247,11 @@ async function handleInvoicePaymentFailed(invoice) {
     p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
     p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
   });
+
+  if (error) {
+    console.error('❌ Error updating Supabase:', error);
+    throw error;
+  }
 
   console.log('⚠️ Usuario premium actualizado (past_due):', chapa);
 }
@@ -235,7 +262,13 @@ async function handleInvoicePaymentFailed(invoice) {
 async function updateUserPremium(chapa, subscription) {
   const estado = subscription.status; // 'active', 'trialing', 'past_due', 'canceled'
 
-  await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+  console.log('💾 Updating user in Supabase:', {
+    chapa,
+    estado,
+    subscription_id: subscription.id,
+  });
+
+  const { data, error } = await supabase.rpc('actualizar_suscripcion_desde_webhook', {
     p_chapa: chapa,
     p_stripe_customer_id: subscription.customer,
     p_stripe_subscription_id: subscription.id,
@@ -244,6 +277,11 @@ async function updateUserPremium(chapa, subscription) {
     p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
     p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
   });
+
+  if (error) {
+    console.error('❌ Error updating user in Supabase:', error);
+    throw error;
+  }
 
   console.log('✅ Usuario premium actualizado en Supabase:', chapa);
 }
