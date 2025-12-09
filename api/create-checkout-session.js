@@ -34,7 +34,12 @@ module.exports = async function handler(req, res) {
       success_url: `${process.env.FRONTEND_URL || 'https://portal-estiba-vlc.vercel.app'}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL || 'https://portal-estiba-vlc.vercel.app'}/?canceled=true`,
       client_reference_id: chapa,
-      metadata: { chapa }
+      metadata: { chapa },
+      subscription_data: {
+        metadata: {
+          chapa: chapa
+        }
+      }
     });
 
     console.log('Checkout session created:', session.id);
