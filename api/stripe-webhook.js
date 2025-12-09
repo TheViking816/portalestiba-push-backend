@@ -262,10 +262,44 @@ async function handleInvoicePaymentFailed(invoice) {
 async function updateUserPremium(chapa, subscription) {
   const estado = subscription.status; // 'active', 'trialing', 'past_due', 'canceled'
 
+  // Validar y convertir fechas
+  let periodo_inicio, periodo_fin;
+
+  try {
+    if (subscription.current_period_start) {
+      periodo_inicio = new Date(subscription.current_period_start * 1000).toISOString();
+    } else {
+      periodo_inicio = new Date().toISOString();
+      console.warn('⚠️ No current_period_start, usando NOW()');
+    }
+  } catch (err) {
+    console.error('❌ Error parsing periodo_inicio:', err);
+    periodo_inicio = new Date().toISOString();
+  }
+
+  try {
+    if (subscription.current_period_end) {
+      periodo_fin = new Date(subscription.current_period_end * 1000).toISOString();
+    } else {
+      // Si no hay fecha fin, poner 1 mes desde ahora
+      const oneMonthFromNow = new Date();
+      oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
+      periodo_fin = oneMonthFromNow.toISOString();
+      console.warn('⚠️ No current_period_end, usando NOW() + 1 mes');
+    }
+  } catch (err) {
+    console.error('❌ Error parsing periodo_fin:', err);
+    const oneMonthFromNow = new Date();
+    oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
+    periodo_fin = oneMonthFromNow.toISOString();
+  }
+
   console.log('💾 Updating user in Supabase:', {
     chapa,
     estado,
     subscription_id: subscription.id,
+    periodo_inicio,
+    periodo_fin,
   });
 
   const { data, error } = await supabase.rpc('actualizar_suscripcion_desde_webhook', {
@@ -274,8 +308,8 @@ async function updateUserPremium(chapa, subscription) {
     p_stripe_subscription_id: subscription.id,
     p_stripe_price_id: subscription.items.data[0].price.id,
     p_estado: estado,
-    p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
-    p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
+    p_periodo_inicio: periodo_inicio,
+    p_periodo_fin: periodo_fin,
   });
 
   if (error) {
