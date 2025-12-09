@@ -31,8 +31,8 @@ module.exports = async function handler(req, res) {
         price: priceId || process.env.STRIPE_PRICE_ID_MENSUAL || 'price_1SVccrFApc6nOGEvgrJJ1xBR',
         quantity: 1,
       }],
-      success_url: `${process.env.VITE_APP_URL || 'https://portalestibavlc.com'}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.VITE_APP_URL || 'https://portalestibavlc.com'}/?canceled=true`,
+      success_url: `${process.env.FRONTEND_URL || 'https://portalestibavlc.netlify.app'}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL || 'https://portalestibavlc.netlify.app'}/?canceled=true`,
       client_reference_id: chapa,
       metadata: { chapa }
     });
