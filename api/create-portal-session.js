@@ -69,7 +69,7 @@ module.exports = async (req, res) => {
     // Crear sesión del Customer Portal
     const session = await stripe.billingPortal.sessions.create({
       customer: usuario.stripe_customer_id,
-      return_url: `${process.env.FRONTEND_URL || 'https://portalestibavlc.netlify.app'}?portal=return`,
+      return_url: `${process.env.FRONTEND_URL || 'https://portal-estiba-vlc.vercel.app/'}?portal=return`,
     });
 
     console.log('✅ Portal session created:', session.id);
