@@ -11,7 +11,7 @@ const { createClient } = require('@supabase/supabase-js');
 // ============================================
 // CONFIGURACIÓN
 // ============================================
-const resend = new Resend(process.env.RESEND_API_KEY);
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'Portal Estiba VLC <onboarding@resend.dev>';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -93,7 +93,8 @@ module.exports = async (req, res) => {
       console.log(`[FORGOT-PASSWORD] Usuario sin email: ${chapaLimpia}`);
       return res.status(200).json({
         success: false,
-        message: 'Tu cuenta no tiene un correo electrónico registrado. Contacta al administrador.'
+        needsEmail: true,
+        message: 'Tu cuenta no tiene un correo registrado. Verifica tu email para continuar.'
       });
     }
 
@@ -133,13 +134,23 @@ module.exports = async (req, res) => {
     // ============================================
     // 6. ENVIAR EMAIL VIA RESEND
     // ============================================
+    if (!process.env.RESEND_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        message: 'Falta configurar RESEND_API_KEY'
+      });
+    }
+
+    const resend = new Resend(process.env.RESEND_API_KEY);
     const emailHtml = crearEmailHTML(usuario.nombre, usuario.chapa, resetLink);
+    const emailText = crearEmailText(usuario.nombre, usuario.chapa, resetLink);
 
     const { data: emailData, error: emailError } = await resend.emails.send({
-      from: 'Portal Estiba VLC <onboarding@resend.dev>', // Cambiar a dominio verificado en producción
+      from: RESEND_FROM_EMAIL, // Cambiar a dominio verificado en producción
       to: usuario.email,
-      subject: '🔐 Recupera tu contraseña - Portal Estiba VLC',
-      html: emailHtml
+      subject: 'Recupera tu contrasena - Portal Estiba VLC',
+      html: emailHtml,
+      text: emailText
     });
 
     if (emailError) {
@@ -179,7 +190,7 @@ function crearEmailHTML(nombre, chapa, resetLink) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Recupera tu contraseña</title>
+  <title>Recupera tu contrase&ntilde;a</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f4f4; padding: 40px 0;">
@@ -190,7 +201,7 @@ function crearEmailHTML(nombre, chapa, resetLink) {
           <!-- Header -->
           <tr>
             <td style="background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 40px; text-align: center; border-radius: 8px 8px 0 0;">
-              <h1 style="color: #ffffff; margin: 0; font-size: 28px;">🔐 Recuperación de Contraseña</h1>
+              <h1 style="color: #ffffff; margin: 0; font-size: 28px;">Recuperacion de Contrasena</h1>
             </td>
           </tr>
 
@@ -202,11 +213,11 @@ function crearEmailHTML(nombre, chapa, resetLink) {
               </p>
 
               <p style="color: #333333; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
-                Recibimos una solicitud para restablecer la contraseña de tu cuenta en el <strong>Portal Estiba VLC</strong>.
+                Recibimos una solicitud para restablecer la contrase&ntilde;a de tu cuenta en el <strong>Portal Estiba VLC</strong>.
               </p>
 
               <p style="color: #333333; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
-                Haz clic en el botón de abajo para crear una nueva contraseña. Este enlace <strong>expirará en 1 hora</strong>.
+                Haz clic en el bot&oacute;n de abajo para crear una nueva contrase&ntilde;a. Este enlace <strong>expirar&aacute; en 1 hora</strong>.
               </p>
 
               <!-- Button -->
@@ -214,7 +225,7 @@ function crearEmailHTML(nombre, chapa, resetLink) {
                 <tr>
                   <td align="center" style="padding: 20px 0;">
                     <a href="${resetLink}" style="display: inline-block; background-color: #3b82f6; color: #ffffff; text-decoration: none; padding: 16px 40px; border-radius: 6px; font-size: 18px; font-weight: bold;">
-                      Restablecer Contraseña
+                      Restablecer Contrase&ntilde;a
                     </a>
                   </td>
                 </tr>
@@ -222,14 +233,14 @@ function crearEmailHTML(nombre, chapa, resetLink) {
 
               <!-- Fallback Link -->
               <p style="color: #666666; font-size: 14px; line-height: 1.6; margin: 20px 0 0 0; padding: 20px; background-color: #f9fafb; border-left: 4px solid #3b82f6; border-radius: 4px;">
-                <strong>Si el botón no funciona</strong>, copia y pega este enlace en tu navegador:<br>
+                <strong>Si el bot&oacute;n no funciona</strong>, copia y pega este enlace en tu navegador:<br>
                 <a href="${resetLink}" style="color: #3b82f6; word-break: break-all;">${resetLink}</a>
               </p>
 
               <!-- Security Notice -->
               <p style="color: #dc2626; font-size: 14px; line-height: 1.6; margin: 30px 0 0 0; padding: 15px; background-color: #fef2f2; border-left: 4px solid #dc2626; border-radius: 4px;">
-                <strong>⚠️ Aviso de seguridad:</strong><br>
-                Si no solicitaste este cambio de contraseña, ignora este correo. Tu contraseña permanecerá segura.
+                <strong>Aviso de seguridad:</strong><br>
+                Si no solicitaste este cambio de contrase&ntilde;a, ignora este correo. Tu contrase&ntilde;a permanecer&aacute; segura.
               </p>
             </td>
           </tr>
@@ -241,7 +252,7 @@ function crearEmailHTML(nombre, chapa, resetLink) {
                 Portal Estiba VLC
               </p>
               <p style="color: #999999; font-size: 12px; margin: 0;">
-                Este es un correo automático. Por favor, no respondas a este mensaje.
+                Este es un correo autom&aacute;tico. Por favor, no respondas a este mensaje.
               </p>
             </td>
           </tr>
@@ -253,4 +264,16 @@ function crearEmailHTML(nombre, chapa, resetLink) {
 </body>
 </html>
   `;
+}
+
+function crearEmailText(nombre, chapa, resetLink) {
+  return [
+    `Hola ${nombre} (Chapa: ${chapa}),`,
+    '',
+    'Recibimos una solicitud para restablecer la contrasena de tu cuenta en el Portal Estiba VLC.',
+    'Si no la solicitaste, puedes ignorar este correo.',
+    '',
+    `Enlace de recuperacion (expira en 1 hora): ${resetLink}`,
+    ''
+  ].join('\n');
 }
