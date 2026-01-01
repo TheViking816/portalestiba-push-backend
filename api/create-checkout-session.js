@@ -19,15 +19,17 @@ module.exports = async function handler(req, res) {
   const origin = req.headers.origin;
   const referer = req.headers.referer;
 
+  const legacyMessage = `Si el pago falla, abre el portal desde el dominio oficial: ${allowedOrigin}/ (la version antigua ya no funciona).`;
+
   if (origin && origin !== allowedOrigin) {
     return res.status(400).json({
-      error: `Dominio no permitido. Usa ${allowedOrigin}/`
+      error: legacyMessage
     });
   }
 
   if (referer && !referer.startsWith(allowedOrigin)) {
     return res.status(400).json({
-      error: `Dominio no permitido. Usa ${allowedOrigin}/`
+      error: legacyMessage
     });
   }
 
