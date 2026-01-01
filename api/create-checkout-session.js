@@ -15,6 +15,22 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const allowedOrigin = 'https://portal-estiba-vlc.vercel.app';
+  const origin = req.headers.origin;
+  const referer = req.headers.referer;
+
+  if (origin && origin !== allowedOrigin) {
+    return res.status(400).json({
+      error: `Dominio no permitido. Usa ${allowedOrigin}/`
+    });
+  }
+
+  if (referer && !referer.startsWith(allowedOrigin)) {
+    return res.status(400).json({
+      error: `Dominio no permitido. Usa ${allowedOrigin}/`
+    });
+  }
+
   const { chapa, priceId } = req.body;
 
   if (!chapa) {
