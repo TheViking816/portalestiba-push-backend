@@ -21,6 +21,16 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'Chapa es requerida' });
   }
 
+  const allowedPriceIds = new Set([
+    'price_1ShUsJFaw8romGYaKSImR29Z', // mensual
+    'price_1Shc9sFaw8romGYaAdQia54L'  // anual
+  ]);
+
+  if (!priceId || !allowedPriceIds.has(priceId)) {
+    console.warn('Invalid priceId received:', priceId);
+    return res.status(400).json({ error: 'PriceId invalido' });
+  }
+
   try {
     console.log('Creating checkout session for chapa:', chapa);
 
@@ -28,7 +38,7 @@ module.exports = async function handler(req, res) {
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{
-        price: priceId || process.env.STRIPE_PRICE_ID_MENSUAL || 'price_1SVccrFApc6nOGEvgrJJ1xBR',
+        price: priceId,
         quantity: 1,
       }],
       success_url: `${process.env.FRONTEND_URL || 'https://portal-estiba-vlc.vercel.app'}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
@@ -49,3 +59,6 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: error.message });
   }
 };
+
+
+
