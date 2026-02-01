@@ -1,4 +1,10 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 module.exports = async function handler(req, res) {
   // Configurar CORS
@@ -51,6 +57,40 @@ module.exports = async function handler(req, res) {
 
   try {
     console.log('Creating checkout session for chapa:', chapa);
+
+    const { data: usuario, error: usuarioError } = await supabase
+      .from('usuarios_premium')
+      .select('estado, periodo_fin, stripe_customer_id')
+      .eq('chapa', chapa)
+      .limit(1)
+      .maybeSingle();
+
+    if (usuarioError) {
+      console.warn('⚠️ No se pudo consultar usuarios_premium:', usuarioError.message);
+    } else if (usuario) {
+      const estado = (usuario.estado || '').toLowerCase();
+      const periodoFin = usuario.periodo_fin ? new Date(usuario.periodo_fin) : null;
+      const vigente = estado === 'active' || estado === 'trialing';
+      const noExpirado = !periodoFin || periodoFin > new Date();
+
+      if (vigente && noExpirado) {
+        if (!usuario.stripe_customer_id) {
+          return res.status(409).json({
+            error: 'Suscripción activa detectada pero sin cliente Stripe. Contacta soporte.'
+          });
+        }
+
+        const portalSession = await stripe.billingPortal.sessions.create({
+          customer: usuario.stripe_customer_id,
+          return_url: `${process.env.FRONTEND_URL || 'https://portal-estiba-vlc.vercel.app/'}?portal=return`,
+        });
+
+        return res.status(200).json({
+          url: portalSession.url,
+          alreadyActive: true
+        });
+      }
+    }
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
