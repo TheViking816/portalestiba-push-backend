@@ -22,6 +22,22 @@ export const config = {
 };
 
 module.exports = async (req, res) => {
+  // Endpoint admin de reconciliación (sin firma Stripe)
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.replace('Bearer ', '').trim();
+  const adminAction = (req.query && req.query.action) ? String(req.query.action) : '';
+  if (req.method === 'POST' && adminAction === 'reconcile') {
+    if (!process.env.ADMIN_SECRET || token !== process.env.ADMIN_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    try {
+      const result = await reconcileSubscriptions();
+      return res.status(200).json(result);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -119,6 +135,44 @@ module.exports = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+async function reconcileSubscriptions() {
+  const { data: usuarios, error } = await supabase
+    .from('usuarios_premium')
+    .select('chapa, stripe_subscription_id')
+    .not('stripe_subscription_id', 'is', null);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const resultados = [];
+
+  for (const user of usuarios || []) {
+    try {
+      const subscription = await stripe.subscriptions.retrieve(user.stripe_subscription_id);
+      await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+        p_chapa: user.chapa,
+        p_stripe_customer_id: subscription.customer,
+        p_stripe_subscription_id: subscription.id,
+        p_stripe_price_id: subscription.items.data[0].price.id,
+        p_estado: subscription.status,
+        p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
+        p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
+      });
+      resultados.push({ chapa: user.chapa, ok: true });
+    } catch (err) {
+      resultados.push({ chapa: user.chapa, ok: false, error: err.message });
+    }
+  }
+
+  return {
+    total: resultados.length,
+    ok: resultados.filter(r => r.ok).length,
+    failed: resultados.filter(r => !r.ok).length,
+    resultados
+  };
+}
 
 /**
  * Maneja cuando se completa un checkout

@@ -6,4 +6,4 @@ Endpoints principales:
 - `POST /api/stripe-webhook`
 
 Admin:
-- `POST /api/reconcile-subscriptions` (requiere `ADMIN_SECRET`)
+- `POST /api/stripe-webhook?action=reconcile` (requiere `ADMIN_SECRET`)
