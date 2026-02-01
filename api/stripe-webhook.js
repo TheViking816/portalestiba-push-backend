@@ -201,10 +201,30 @@ async function handleCheckoutCompleted(session) {
 async function handleSubscriptionUpdate(subscription) {
   console.log('🔄 Subscription updated:', subscription.id);
 
-  const chapa = subscription.metadata?.chapa;
+  let chapa = subscription.metadata?.chapa;
 
   if (!chapa) {
-    console.error('❌ No chapa found in subscription metadata');
+    console.warn('⚠️ No chapa in subscription metadata. Buscando por stripe_customer_id...');
+    try {
+      const { data: usuario, error } = await supabase
+        .from('usuarios_premium')
+        .select('chapa')
+        .eq('stripe_customer_id', subscription.customer)
+        .maybeSingle();
+
+      if (error) {
+        console.error('❌ Error buscando chapa por customer:', error);
+      } else if (usuario && usuario.chapa) {
+        chapa = usuario.chapa;
+        console.log('✅ Chapa encontrada por customer:', chapa);
+      }
+    } catch (err) {
+      console.error('❌ Error buscando chapa por customer:', err);
+    }
+  }
+
+  if (!chapa) {
+    console.error('❌ No chapa found (metadata ni customer).');
     return;
   }
 
@@ -219,10 +239,30 @@ async function handleSubscriptionUpdate(subscription) {
 async function handleSubscriptionCanceled(subscription) {
   console.log('❌ Subscription canceled:', subscription.id);
 
-  const chapa = subscription.metadata?.chapa;
+  let chapa = subscription.metadata?.chapa;
 
   if (!chapa) {
-    console.error('❌ No chapa found in subscription metadata');
+    console.warn('⚠️ No chapa in subscription metadata. Buscando por stripe_customer_id...');
+    try {
+      const { data: usuario, error } = await supabase
+        .from('usuarios_premium')
+        .select('chapa')
+        .eq('stripe_customer_id', subscription.customer)
+        .maybeSingle();
+
+      if (error) {
+        console.error('❌ Error buscando chapa por customer:', error);
+      } else if (usuario && usuario.chapa) {
+        chapa = usuario.chapa;
+        console.log('✅ Chapa encontrada por customer:', chapa);
+      }
+    } catch (err) {
+      console.error('❌ Error buscando chapa por customer:', err);
+    }
+  }
+
+  if (!chapa) {
+    console.error('❌ No chapa found (metadata ni customer).');
     return;
   }
 
@@ -258,10 +298,30 @@ async function handleInvoicePaymentSucceeded(invoice) {
   }
 
   const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
-  const chapa = subscription.metadata?.chapa;
+  let chapa = subscription.metadata?.chapa;
 
   if (!chapa) {
-    console.error('❌ No chapa found in subscription metadata');
+    console.warn('⚠️ No chapa in subscription metadata. Buscando por stripe_customer_id...');
+    try {
+      const { data: usuario, error } = await supabase
+        .from('usuarios_premium')
+        .select('chapa')
+        .eq('stripe_customer_id', subscription.customer)
+        .maybeSingle();
+
+      if (error) {
+        console.error('❌ Error buscando chapa por customer:', error);
+      } else if (usuario && usuario.chapa) {
+        chapa = usuario.chapa;
+        console.log('✅ Chapa encontrada por customer:', chapa);
+      }
+    } catch (err) {
+      console.error('❌ Error buscando chapa por customer:', err);
+    }
+  }
+
+  if (!chapa) {
+    console.error('❌ No chapa found (metadata ni customer).');
     return;
   }
 
@@ -282,10 +342,30 @@ async function handleInvoicePaymentFailed(invoice) {
   }
 
   const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
-  const chapa = subscription.metadata?.chapa;
+  let chapa = subscription.metadata?.chapa;
 
   if (!chapa) {
-    console.error('❌ No chapa found in subscription metadata');
+    console.warn('⚠️ No chapa in subscription metadata. Buscando por stripe_customer_id...');
+    try {
+      const { data: usuario, error } = await supabase
+        .from('usuarios_premium')
+        .select('chapa')
+        .eq('stripe_customer_id', subscription.customer)
+        .maybeSingle();
+
+      if (error) {
+        console.error('❌ Error buscando chapa por customer:', error);
+      } else if (usuario && usuario.chapa) {
+        chapa = usuario.chapa;
+        console.log('✅ Chapa encontrada por customer:', chapa);
+      }
+    } catch (err) {
+      console.error('❌ Error buscando chapa por customer:', err);
+    }
+  }
+
+  if (!chapa) {
+    console.error('❌ No chapa found (metadata ni customer).');
     return;
   }
 
