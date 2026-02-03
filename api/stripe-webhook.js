@@ -1,8 +1,6 @@
 /**
  * Endpoint para recibir webhooks de Stripe
  * POST /api/stripe-webhook
- *
- * IMPORTANTE: Este endpoint necesita raw body para verificar la firma de Stripe
  */
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -14,30 +12,26 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Configuración especial de Vercel para recibir raw body
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+async function getRawBody(req) {
+  if (req.body && Buffer.isBuffer(req.body)) {
+    return req.body;
+  }
+  if (req.body && typeof req.body === 'string') {
+    return Buffer.from(req.body);
+  }
+  if (req.body && typeof req.body === 'object') {
+    // Ya parseado: la firma puede fallar, pero intentamos
+    return Buffer.from(JSON.stringify(req.body));
+  }
+  return await new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
 
 module.exports = async (req, res) => {
-  // Endpoint admin de reconciliación (sin firma Stripe)
-  const authHeader = req.headers['authorization'] || '';
-  const token = authHeader.replace('Bearer ', '').trim();
-  const adminAction = (req.query && req.query.action) ? String(req.query.action) : '';
-  if (req.method === 'POST' && adminAction === 'reconcile') {
-    if (!process.env.ADMIN_SECRET || token !== process.env.ADMIN_SECRET) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    try {
-      const result = await reconcileSubscriptions();
-      return res.status(200).json(result);
-    } catch (err) {
-      return res.status(500).json({ error: err.message });
-    }
-  }
-
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -48,45 +42,19 @@ module.exports = async (req, res) => {
   let event;
 
   try {
-    // Leer el raw body
-    const chunks = [];
-    for await (const chunk of req) {
-      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-    }
-    const body = Buffer.concat(chunks);
-
-    console.log('📥 Webhook received');
-    console.log('🔑 Signature present:', !!sig);
-    console.log('📦 Body size:', body.length);
-    console.log('🔐 Webhook secret configured:', !!webhookSecret);
-
-    if (!sig) {
-      console.error('❌ No signature header found');
-      return res.status(400).send('No signature header');
-    }
-
-    if (!webhookSecret) {
-      console.error('❌ STRIPE_WEBHOOK_SECRET not configured');
-      return res.status(500).send('Webhook secret not configured');
-    }
-
     // Verificar la firma del webhook
+    const rawBody = await getRawBody(req);
     event = stripe.webhooks.constructEvent(
-      body,
+      rawBody,
       sig,
       webhookSecret
     );
-
-    console.log('✅ Signature verified, event type:', event.type);
-
   } catch (err) {
     console.error('❌ Webhook signature verification failed:', err.message);
-    console.error('❌ Error type:', err.type);
-    console.error('❌ Full error:', err);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  console.log('📥 Processing webhook event:', event.type);
+  console.log('📥 Webhook event received:', event.type);
 
   try {
     // Procesar diferentes tipos de eventos
@@ -126,53 +94,13 @@ module.exports = async (req, res) => {
         console.log(`ℹ️ Unhandled event type: ${event.type}`);
     }
 
-    console.log('✅ Webhook processed successfully');
     res.status(200).json({ received: true });
 
   } catch (error) {
     console.error('❌ Error processing webhook:', error);
-    console.error('❌ Error stack:', error.stack);
     res.status(500).json({ error: error.message });
   }
 };
-
-async function reconcileSubscriptions() {
-  const { data: usuarios, error } = await supabase
-    .from('usuarios_premium')
-    .select('chapa, stripe_subscription_id')
-    .not('stripe_subscription_id', 'is', null);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  const resultados = [];
-
-  for (const user of usuarios || []) {
-    try {
-      const subscription = await stripe.subscriptions.retrieve(user.stripe_subscription_id);
-      await supabase.rpc('actualizar_suscripcion_desde_webhook', {
-        p_chapa: user.chapa,
-        p_stripe_customer_id: subscription.customer,
-        p_stripe_subscription_id: subscription.id,
-        p_stripe_price_id: subscription.items.data[0].price.id,
-        p_estado: subscription.status,
-        p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
-        p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
-      });
-      resultados.push({ chapa: user.chapa, ok: true });
-    } catch (err) {
-      resultados.push({ chapa: user.chapa, ok: false, error: err.message });
-    }
-  }
-
-  return {
-    total: resultados.length,
-    ok: resultados.filter(r => r.ok).length,
-    failed: resultados.filter(r => !r.ok).length,
-    resultados
-  };
-}
 
 /**
  * Maneja cuando se completa un checkout
@@ -187,8 +115,6 @@ async function handleCheckoutCompleted(session) {
     return;
   }
 
-  console.log('📋 Processing checkout for chapa:', chapa);
-
   // Obtener la suscripción
   const subscription = await stripe.subscriptions.retrieve(session.subscription);
 
@@ -199,91 +125,45 @@ async function handleCheckoutCompleted(session) {
  * Maneja actualizaciones de suscripción
  */
 async function handleSubscriptionUpdate(subscription) {
-  console.log('🔄 Subscription updated:', subscription.id);
+  console.log('Subscription updated:', subscription.id);
 
-  let chapa = subscription.metadata?.chapa;
-
-  if (!chapa) {
-    console.warn('⚠️ No chapa in subscription metadata. Buscando por stripe_customer_id...');
-    try {
-      const { data: usuario, error } = await supabase
-        .from('usuarios_premium')
-        .select('chapa')
-        .eq('stripe_customer_id', subscription.customer)
-        .maybeSingle();
-
-      if (error) {
-        console.error('❌ Error buscando chapa por customer:', error);
-      } else if (usuario && usuario.chapa) {
-        chapa = usuario.chapa;
-        console.log('✅ Chapa encontrada por customer:', chapa);
-      }
-    } catch (err) {
-      console.error('❌ Error buscando chapa por customer:', err);
-    }
-  }
+  // Refrescar la suscripcion para tener periodos correctos
+  const freshSubscription = await stripe.subscriptions.retrieve(subscription.id);
+  const chapa = await resolveChapa(freshSubscription);
 
   if (!chapa) {
-    console.error('❌ No chapa found (metadata ni customer).');
+    console.error('No chapa found in subscription metadata');
     return;
   }
 
-  console.log('📋 Updating subscription for chapa:', chapa);
-
-  await updateUserPremium(chapa, subscription);
+  await updateUserPremium(chapa, freshSubscription);
 }
 
 /**
  * Maneja cancelación de suscripción
  */
 async function handleSubscriptionCanceled(subscription) {
-  console.log('❌ Subscription canceled:', subscription.id);
+  console.log('Subscription canceled:', subscription.id);
 
-  let chapa = subscription.metadata?.chapa;
-
-  if (!chapa) {
-    console.warn('⚠️ No chapa in subscription metadata. Buscando por stripe_customer_id...');
-    try {
-      const { data: usuario, error } = await supabase
-        .from('usuarios_premium')
-        .select('chapa')
-        .eq('stripe_customer_id', subscription.customer)
-        .maybeSingle();
-
-      if (error) {
-        console.error('❌ Error buscando chapa por customer:', error);
-      } else if (usuario && usuario.chapa) {
-        chapa = usuario.chapa;
-        console.log('✅ Chapa encontrada por customer:', chapa);
-      }
-    } catch (err) {
-      console.error('❌ Error buscando chapa por customer:', err);
-    }
-  }
+  const freshSubscription = await stripe.subscriptions.retrieve(subscription.id);
+  const chapa = await resolveChapa(freshSubscription);
 
   if (!chapa) {
-    console.error('❌ No chapa found (metadata ni customer).');
+    console.error('No chapa found in subscription metadata');
     return;
   }
 
-  console.log('📋 Canceling subscription for chapa:', chapa);
-
-  const { data, error } = await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+  await supabase.rpc('actualizar_suscripcion_desde_webhook', {
     p_chapa: chapa,
-    p_stripe_customer_id: subscription.customer,
-    p_stripe_subscription_id: subscription.id,
-    p_stripe_price_id: subscription.items.data[0].price.id,
+    p_stripe_customer_id: freshSubscription.customer,
+    p_stripe_subscription_id: freshSubscription.id,
+    p_stripe_price_id: freshSubscription.items.data[0].price.id,
     p_estado: 'canceled',
-    p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
-    p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
+    p_periodo_inicio: new Date(freshSubscription.current_period_start * 1000).toISOString(),
+    p_periodo_fin: new Date(freshSubscription.current_period_end * 1000).toISOString(),
   });
 
-  if (error) {
-    console.error('❌ Error updating Supabase:', error);
-    throw error;
-  }
-
-  console.log('✅ Usuario premium actualizado (cancelado):', chapa);
+  console.log('Usuario premium actualizado (cancelado):', chapa);
 }
 
 /**
@@ -292,40 +172,12 @@ async function handleSubscriptionCanceled(subscription) {
 async function handleInvoicePaymentSucceeded(invoice) {
   console.log('💰 Invoice payment succeeded:', invoice.id);
 
-  if (!invoice.subscription) {
-    console.log('ℹ️ Invoice has no subscription, skipping');
-    return;
-  }
+  if (!invoice.subscription) return;
 
   const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
-  let chapa = subscription.metadata?.chapa;
+  const chapa = await resolveChapa(subscription);
 
-  if (!chapa) {
-    console.warn('⚠️ No chapa in subscription metadata. Buscando por stripe_customer_id...');
-    try {
-      const { data: usuario, error } = await supabase
-        .from('usuarios_premium')
-        .select('chapa')
-        .eq('stripe_customer_id', subscription.customer)
-        .maybeSingle();
-
-      if (error) {
-        console.error('❌ Error buscando chapa por customer:', error);
-      } else if (usuario && usuario.chapa) {
-        chapa = usuario.chapa;
-        console.log('✅ Chapa encontrada por customer:', chapa);
-      }
-    } catch (err) {
-      console.error('❌ Error buscando chapa por customer:', err);
-    }
-  }
-
-  if (!chapa) {
-    console.error('❌ No chapa found (metadata ni customer).');
-    return;
-  }
-
-  console.log('📋 Processing invoice payment for chapa:', chapa);
+  if (!chapa) return;
 
   await updateUserPremium(chapa, subscription);
 }
@@ -336,43 +188,15 @@ async function handleInvoicePaymentSucceeded(invoice) {
 async function handleInvoicePaymentFailed(invoice) {
   console.log('❌ Invoice payment failed:', invoice.id);
 
-  if (!invoice.subscription) {
-    console.log('ℹ️ Invoice has no subscription, skipping');
-    return;
-  }
+  if (!invoice.subscription) return;
 
   const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
-  let chapa = subscription.metadata?.chapa;
+  const chapa = await resolveChapa(subscription);
 
-  if (!chapa) {
-    console.warn('⚠️ No chapa in subscription metadata. Buscando por stripe_customer_id...');
-    try {
-      const { data: usuario, error } = await supabase
-        .from('usuarios_premium')
-        .select('chapa')
-        .eq('stripe_customer_id', subscription.customer)
-        .maybeSingle();
-
-      if (error) {
-        console.error('❌ Error buscando chapa por customer:', error);
-      } else if (usuario && usuario.chapa) {
-        chapa = usuario.chapa;
-        console.log('✅ Chapa encontrada por customer:', chapa);
-      }
-    } catch (err) {
-      console.error('❌ Error buscando chapa por customer:', err);
-    }
-  }
-
-  if (!chapa) {
-    console.error('❌ No chapa found (metadata ni customer).');
-    return;
-  }
-
-  console.log('📋 Marking subscription as past_due for chapa:', chapa);
+  if (!chapa) return;
 
   // Actualizar estado a 'past_due'
-  const { data, error } = await supabase.rpc('actualizar_suscripcion_desde_webhook', {
+  await supabase.rpc('actualizar_suscripcion_desde_webhook', {
     p_chapa: chapa,
     p_stripe_customer_id: subscription.customer,
     p_stripe_subscription_id: subscription.id,
@@ -382,12 +206,41 @@ async function handleInvoicePaymentFailed(invoice) {
     p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
   });
 
-  if (error) {
-    console.error('❌ Error updating Supabase:', error);
-    throw error;
+  console.log('⚠️ Usuario premium actualizado (past_due):', chapa);
+}
+
+/**
+ * Resuelve chapa usando metadata o registro previo en usuarios_premium
+ */
+async function resolveChapa(subscription) {
+  const metaChapa = subscription.metadata?.chapa;
+  if (metaChapa) return metaChapa;
+
+  try {
+    const bySub = await supabase
+      .from('usuarios_premium')
+      .select('chapa')
+      .eq('stripe_subscription_id', subscription.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (bySub?.data?.chapa) return bySub.data.chapa;
+
+    if (subscription.customer) {
+      const byCustomer = await supabase
+        .from('usuarios_premium')
+        .select('chapa')
+        .eq('stripe_customer_id', subscription.customer)
+        .limit(1)
+        .maybeSingle();
+
+      if (byCustomer?.data?.chapa) return byCustomer.data.chapa;
+    }
+  } catch (err) {
+    console.error('Error resolving chapa:', err.message);
   }
 
-  console.log('⚠️ Usuario premium actualizado (past_due):', chapa);
+  return null;
 }
 
 /**
@@ -396,54 +249,14 @@ async function handleInvoicePaymentFailed(invoice) {
 async function updateUserPremium(chapa, subscription) {
   const estado = subscription.status; // 'active', 'trialing', 'past_due', 'canceled'
 
-  // Validar y convertir fechas
-  let periodo_inicio, periodo_fin;
-
-  try {
-    if (subscription.current_period_start) {
-      periodo_inicio = new Date(subscription.current_period_start * 1000).toISOString();
-    } else {
-      periodo_inicio = new Date().toISOString();
-      console.warn('⚠️ No current_period_start, usando NOW()');
-    }
-  } catch (err) {
-    console.error('❌ Error parsing periodo_inicio:', err);
-    periodo_inicio = new Date().toISOString();
-  }
-
-  try {
-    if (subscription.current_period_end) {
-      periodo_fin = new Date(subscription.current_period_end * 1000).toISOString();
-    } else {
-      // Si no hay fecha fin, poner 1 mes desde ahora
-      const oneMonthFromNow = new Date();
-      oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
-      periodo_fin = oneMonthFromNow.toISOString();
-      console.warn('⚠️ No current_period_end, usando NOW() + 1 mes');
-    }
-  } catch (err) {
-    console.error('❌ Error parsing periodo_fin:', err);
-    const oneMonthFromNow = new Date();
-    oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
-    periodo_fin = oneMonthFromNow.toISOString();
-  }
-
-  console.log('💾 Updating user in Supabase:', {
-    chapa,
-    estado,
-    subscription_id: subscription.id,
-    periodo_inicio,
-    periodo_fin,
-  });
-
   const { data, error } = await supabase.rpc('actualizar_suscripcion_desde_webhook', {
     p_chapa: chapa,
     p_stripe_customer_id: subscription.customer,
     p_stripe_subscription_id: subscription.id,
     p_stripe_price_id: subscription.items.data[0].price.id,
     p_estado: estado,
-    p_periodo_inicio: periodo_inicio,
-    p_periodo_fin: periodo_fin,
+    p_periodo_inicio: new Date(subscription.current_period_start * 1000).toISOString(),
+    p_periodo_fin: new Date(subscription.current_period_end * 1000).toISOString(),
   });
 
   if (error) {
