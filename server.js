@@ -15,6 +15,11 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 // --- FIN DE LA MODIFICACIÓN ---
 
+// Stripe webhook necesita el body crudo para validar la firma.
+// Esta ruta debe ir ANTES del bodyParser.json().
+const stripeWebhookHandler = require('./api/stripe-webhook');
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), stripeWebhookHandler);
+
 app.use(bodyParser.json());
 
 const supabaseUrl = process.env.SUPABASE_URL;
