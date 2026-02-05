@@ -21,16 +21,16 @@ const supabase = createClient(
 );
 
 async function getRawBody(req) {
+  if (req.rawBody && Buffer.isBuffer(req.rawBody)) {
+    return req.rawBody;
+  }
   if (req.body && Buffer.isBuffer(req.body)) {
     return req.body;
   }
   if (req.body && typeof req.body === 'string') {
     return Buffer.from(req.body);
   }
-  if (req.body && typeof req.body === 'object') {
-    // Ya parseado: la firma puede fallar, pero intentamos
-    return Buffer.from(JSON.stringify(req.body));
-  }
+  // No intentes serializar objetos parseados: rompe la firma.
   return await new Promise((resolve, reject) => {
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
