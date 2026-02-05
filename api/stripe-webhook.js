@@ -6,6 +6,14 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { createClient } = require('@supabase/supabase-js');
 
+// En Vercel, necesitamos el body crudo para verificar la firma de Stripe
+// y desactivar el bodyParser automático.
+module.exports.config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 // Cliente de Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
