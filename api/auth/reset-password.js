@@ -94,10 +94,8 @@ module.exports = async (req, res) => {
     // ============================================
     const { data: tokenRecord, error: tokenError } = await supabase
       .from('password_reset_tokens')
-      .select('id, chapa, expires_at, used_at')
+      .select('chapa, expires_at, token')
       .eq('token', tokenLimpio)
-      .order('created_at', { ascending: false })
-      .limit(1)
       .maybeSingle();
 
     if (tokenError) {
@@ -113,14 +111,6 @@ module.exports = async (req, res) => {
         success: false,
         error: 'invalid_token',
         message: 'El enlace de recuperación no es válido.'
-      });
-    }
-
-    if (tokenRecord.used_at) {
-      return res.status(400).json({
-        success: false,
-        error: 'token_used',
-        message: 'Este enlace de recuperación ya fue utilizado.'
       });
     }
 
@@ -175,15 +165,13 @@ module.exports = async (req, res) => {
       });
     }
 
-    const nowIso = new Date().toISOString();
-
-    const { error: markUsedError } = await supabase
+    const { error: deleteTokenError } = await supabase
       .from('password_reset_tokens')
-      .update({ used_at: nowIso })
-      .eq('id', tokenRecord.id);
+      .delete()
+      .eq('token', tokenLimpio);
 
-    if (markUsedError) {
-      console.error('[RESET-PASSWORD] Error marcando token como usado:', markUsedError);
+    if (deleteTokenError) {
+      console.error('[RESET-PASSWORD] Error eliminando token usado:', deleteTokenError);
       return res.status(500).json({
         success: false,
         message: 'La contraseña se actualizó, pero no se pudo cerrar el enlace de recuperación. Revisa el estado manualmente.'
@@ -192,10 +180,9 @@ module.exports = async (req, res) => {
 
     await supabase
       .from('password_reset_tokens')
-      .update({ used_at: nowIso })
+      .delete()
       .eq('chapa', tokenRecord.chapa)
-      .is('used_at', null)
-      .neq('id', tokenRecord.id);
+      .neq('token', tokenLimpio);
 
     // ============================================
     // 4. RETORNAR ÉXITO
