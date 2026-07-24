@@ -2,16 +2,27 @@
 // PASSWORD RECOVERY - FORGOT PASSWORD API
 // ============================================
 // Endpoint: POST /api/auth/forgot-password
-// Genera token de recuperación y envía email via Resend
+// Genera token de recuperación y envía email mediante Gmail SMTP
 
 const crypto = require('crypto');
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 
 // ============================================
 // CONFIGURACIÓN
 // ============================================
-const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'Portal Estiba VLC <onboarding@resend.dev>';
+const GMAIL_USER = process.env.GMAIL_USER;
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+
+const mailTransport = GMAIL_USER && GMAIL_APP_PASSWORD
+  ? nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: GMAIL_USER,
+        pass: GMAIL_APP_PASSWORD
+      }
+    })
+  : null;
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -132,36 +143,44 @@ module.exports = async (req, res) => {
     const resetLink = `${RESET_PAGE_URL}?token=${token}`;
 
     // ============================================
-    // 6. ENVIAR EMAIL VIA RESEND
+    // 6. ENVIAR EMAIL MEDIANTE GMAIL
     // ============================================
-    if (!process.env.RESEND_API_KEY) {
+    if (!mailTransport) {
       return res.status(500).json({
         success: false,
-        message: 'Falta configurar RESEND_API_KEY'
+        message: 'El servicio de correo no está configurado.'
       });
     }
 
-    const resend = new Resend(process.env.RESEND_API_KEY);
     const emailHtml = crearEmailHTML(usuario.nombre, usuario.chapa, resetLink);
     const emailText = crearEmailText(usuario.nombre, usuario.chapa, resetLink);
 
-    const { data: emailData, error: emailError } = await resend.emails.send({
-      from: RESEND_FROM_EMAIL, // Cambiar a dominio verificado en producción
-      to: usuario.email,
-      subject: 'Recupera tu contrasena - Portal Estiba VLC',
-      html: emailHtml,
-      text: emailText
-    });
+    let emailData;
+    try {
+      emailData = await mailTransport.sendMail({
+        from: `Portal Estiba VLC <${GMAIL_USER}>`,
+        to: usuario.email,
+        subject: 'Recupera tu contrasena - Portal Estiba VLC',
+        html: emailHtml,
+        text: emailText
+      });
 
-    if (emailError) {
-      console.error('[FORGOT-PASSWORD] Error enviando email:', emailError);
+      if (!Array.isArray(emailData.accepted) || emailData.accepted.length === 0) {
+        throw new Error('Gmail no aceptó ningún destinatario');
+      }
+    } catch (emailError) {
+      await supabase
+        .from('password_reset_tokens')
+        .delete()
+        .eq('token', token);
+      console.error('[FORGOT-PASSWORD] Error enviando email:', emailError.message);
       return res.status(500).json({
         success: false,
         message: 'Error al enviar correo de recuperación. Inténtalo de nuevo.'
       });
     }
 
-    console.log(`[FORGOT-PASSWORD] Email enviado exitosamente a ${usuario.email}, ID: ${emailData?.id}`);
+    console.log(`[FORGOT-PASSWORD] Email aceptado por Gmail para ${usuario.chapa}, ID: ${emailData.messageId}`);
 
     // ============================================
     // 7. RETORNAR ÉXITO
@@ -277,3 +296,4 @@ function crearEmailText(nombre, chapa, resetLink) {
     ''
   ].join('\n');
 }
+
