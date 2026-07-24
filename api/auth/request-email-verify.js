@@ -2,15 +2,25 @@
 // EMAIL VERIFICATION - REQUEST CODE
 // ============================================
 // Endpoint: POST /api/auth/request-email-verify
-// Genera un codigo y lo envia al correo indicado
+// Genera un codigo y lo envia al correo indicado mediante Gmail SMTP
 const crypto = require('crypto');
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 
 // ============================================
 // CONFIGURACION
 // ============================================
-const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'Portal Estiba VLC <onboarding@resend.dev>';
+const GMAIL_USER = process.env.GMAIL_USER;
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+const mailTransport = GMAIL_USER && GMAIL_APP_PASSWORD
+  ? nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: GMAIL_USER,
+        pass: GMAIL_APP_PASSWORD
+      }
+    })
+  : null;
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -183,27 +193,35 @@ module.exports = async (req, res) => {
       });
     }
 
-    if (!process.env.RESEND_API_KEY) {
+    if (!mailTransport) {
       return res.status(500).json({
         success: false,
-        message: 'Falta configurar RESEND_API_KEY'
+        message: 'El servicio de correo no está configurado.'
       });
     }
 
-    const resend = new Resend(process.env.RESEND_API_KEY);
     const emailHtml = crearEmailHtml(chapaLimpia, codigo);
     const emailText = crearEmailText(chapaLimpia, codigo);
 
-    const { error: emailError } = await resend.emails.send({
-      from: RESEND_FROM_EMAIL,
-      to: emailLimpio,
-      subject: 'Codigo de verificacion - Portal Estiba VLC',
-      html: emailHtml,
-      text: emailText
-    });
+    try {
+      const emailData = await mailTransport.sendMail({
+        from: `Portal Estiba VLC <${GMAIL_USER}>`,
+        to: emailLimpio,
+        subject: 'Codigo de verificacion - Portal Estiba VLC',
+        html: emailHtml,
+        text: emailText
+      });
 
-    if (emailError) {
-      console.error('[EMAIL-VERIFY] Error enviando email:', emailError);
+      if (!Array.isArray(emailData.accepted) || emailData.accepted.length === 0) {
+        throw new Error('Gmail no aceptó ningún destinatario');
+      }
+    } catch (emailError) {
+      await supabase
+        .from('email_verification_codes')
+        .delete()
+        .eq('chapa', chapaLimpia)
+        .eq('code', codigo);
+      console.error('[EMAIL-VERIFY] Error enviando email:', emailError.message);
       return res.status(500).json({
         success: false,
         message: 'Error al enviar el codigo. Intentalo de nuevo.'
@@ -222,3 +240,4 @@ module.exports = async (req, res) => {
     });
   }
 };
+
