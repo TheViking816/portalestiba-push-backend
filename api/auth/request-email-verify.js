@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
+const handleForumReplyNotification = require('../../lib/forum-reply-notification');
 
 // ============================================
 // CONFIGURACION
@@ -102,6 +103,10 @@ function crearEmailText(chapa, codigo) {
 // FUNCION PRINCIPAL
 // ============================================
 module.exports = async (req, res) => {
+  if (req.query?.mode === 'forum-reply') {
+    return handleForumReplyNotification(req, res);
+  }
+
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
