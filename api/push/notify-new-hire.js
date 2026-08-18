@@ -59,7 +59,7 @@ module.exports = async (req, res) => {
             if (!process.env.APP_CPE_SUPABASE_URL || !process.env.APP_CPE_SUPABASE_SERVICE_ROLE || !process.env.RESEND_API_KEY) {
                 return res.status(503).json({ ok: false, configured: false });
             }
-            return sendAppCpeActivationEmails(res);
+            return await sendAppCpeActivationEmails(res);
         }
         const { title, body, url, chapa_target = null } = req.body;
 
