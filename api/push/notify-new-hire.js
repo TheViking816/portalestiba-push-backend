@@ -52,7 +52,7 @@ async function sendAppCpeActivationEmails(res) {
             subject: admin ? `Nuevo usuario pendiente: chapa ${row.chapa}` : 'Tu cuenta de App CPE ya está activada',
             html: admin
                 ? `<h2>Nuevo usuario pendiente</h2><p>La chapa <strong>${row.chapa}</strong> ha guardado sus claves del portal.</p><p>Pasa Cloudflare y ejecuta <strong>Actualizar pendientes App CPE</strong>.</p>`
-                : `<h2>Tu cuenta ya está activada</h2><p>Ya hemos sincronizado el portal de la chapa <strong>${row.chapa}</strong>.</p><p>Puedes entrar en App CPE y consultar tus datos.</p>`
+                : `<h2>Tu cuenta ya está activada</h2><p>Ya hemos sincronizado el portal de la chapa <strong>${row.chapa}</strong>.</p><p>Puedes entrar en App CPE y consultar tus datos.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p>`
         };
         try {
             const provider = await deliverActivationEmail({ resend, message });
