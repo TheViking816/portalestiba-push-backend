@@ -1,10 +1,37 @@
 // api/push/notify-new-hire.js
 const webpush = require('web-push');
 const { createClient } = require('@supabase/supabase-js');
+const { Resend } = require('resend');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+
+async function sendAppCpeActivationEmails(res) {
+    const appCpe = createClient(process.env.APP_CPE_SUPABASE_URL, process.env.APP_CPE_SUPABASE_SERVICE_ROLE, { auth: { persistSession: false } });
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const { data: rows, error } = await appCpe.from('app_cpe_activation_email_outbox').select('id,kind,recipient,chapa,attempts,status').in('status', ['pending', 'failed']).lt('attempts', 5).order('created_at').limit(20);
+    if (error) return res.status(500).json({ ok: false });
+    let sent = 0;
+    for (const row of rows || []) {
+        const { data: claimed } = await appCpe.from('app_cpe_activation_email_outbox').update({ status: 'processing' }).eq('id', row.id).eq('status', row.status).select('id').maybeSingle();
+        if (!claimed) continue;
+        const admin = row.kind === 'admin_pending';
+        const { error: emailError } = await resend.emails.send({
+            from: process.env.RESEND_FROM_EMAIL || 'Portal Estiba VLC <onboarding@resend.dev>',
+            to: row.recipient,
+            subject: admin ? `Nuevo usuario pendiente: chapa ${row.chapa}` : 'Tu cuenta de App CPE ya está activada',
+            html: admin
+                ? `<h2>Nuevo usuario pendiente</h2><p>La chapa <strong>${row.chapa}</strong> ha guardado sus claves del portal.</p><p>Pasa Cloudflare y ejecuta <strong>Actualizar pendientes App CPE</strong>.</p>`
+                : `<h2>Tu cuenta ya está activada</h2><p>Ya hemos sincronizado el portal de la chapa <strong>${row.chapa}</strong>.</p><p>Puedes entrar en App CPE y consultar tus datos.</p>`
+        });
+        await appCpe.from('app_cpe_activation_email_outbox').update(emailError
+            ? { status: 'failed', attempts: row.attempts + 1, last_error: 'Resend rechazó el correo' }
+            : { status: 'sent', attempts: row.attempts + 1, last_error: null, sent_at: new Date().toISOString() }).eq('id', row.id);
+        if (!emailError) sent += 1;
+    }
+    return res.status(200).json({ ok: true, sent });
+}
 
 // Configurar VAPID
 webpush.setVapidDetails(
@@ -28,6 +55,12 @@ module.exports = async (req, res) => {
     }
 
     try {
+        if (req.body?.app_cpe_activation_emails === true) {
+            if (!process.env.APP_CPE_SUPABASE_URL || !process.env.APP_CPE_SUPABASE_SERVICE_ROLE || !process.env.RESEND_API_KEY) {
+                return res.status(503).json({ ok: false, configured: false });
+            }
+            return sendAppCpeActivationEmails(res);
+        }
         const { title, body, url, chapa_target = null } = req.body;
 
         console.log(`📨 Notificación nueva contratación para chapa: ${chapa_target || 'TODOS'}`);
