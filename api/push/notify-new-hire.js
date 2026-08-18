@@ -2,10 +2,38 @@
 const webpush = require('web-push');
 const { createClient } = require('@supabase/supabase-js');
 const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+
+function emailErrorMessage(error) {
+    return String(error?.message || error?.name || 'Error desconocido').slice(0, 500);
+}
+
+async function deliverActivationEmail({ resend, message }) {
+    const { error } = await resend.emails.send(message);
+    if (!error) return 'resend';
+
+    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+        throw new Error(`Resend: ${emailErrorMessage(error)}`);
+    }
+
+    const gmail = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+            user: process.env.GMAIL_USER,
+            pass: process.env.GMAIL_APP_PASSWORD
+        }
+    });
+    await gmail.sendMail({
+        ...message,
+        from: `Portal Estiba VLC <${process.env.GMAIL_USER}>`
+    });
+    console.warn(`Resend rechazó el correo; enviado mediante Gmail: ${emailErrorMessage(error)}`);
+    return 'gmail';
+}
 
 async function sendAppCpeActivationEmails(res) {
     const appCpe = createClient(process.env.APP_CPE_SUPABASE_URL, process.env.APP_CPE_SUPABASE_SERVICE_ROLE, { auth: { persistSession: false } });
@@ -13,24 +41,41 @@ async function sendAppCpeActivationEmails(res) {
     const { data: rows, error } = await appCpe.from('app_cpe_activation_email_outbox').select('id,kind,recipient,chapa,attempts,status').in('status', ['pending', 'failed']).lt('attempts', 5).order('created_at').limit(20);
     if (error) return res.status(500).json({ ok: false });
     let sent = 0;
+    let failed = 0;
     for (const row of rows || []) {
         const { data: claimed } = await appCpe.from('app_cpe_activation_email_outbox').update({ status: 'processing' }).eq('id', row.id).eq('status', row.status).select('id').maybeSingle();
         if (!claimed) continue;
         const admin = row.kind === 'admin_pending';
-        const { error: emailError } = await resend.emails.send({
+        const message = {
             from: process.env.RESEND_FROM_EMAIL || 'Portal Estiba VLC <onboarding@resend.dev>',
             to: row.recipient,
             subject: admin ? `Nuevo usuario pendiente: chapa ${row.chapa}` : 'Tu cuenta de App CPE ya está activada',
             html: admin
                 ? `<h2>Nuevo usuario pendiente</h2><p>La chapa <strong>${row.chapa}</strong> ha guardado sus claves del portal.</p><p>Pasa Cloudflare y ejecuta <strong>Actualizar pendientes App CPE</strong>.</p>`
                 : `<h2>Tu cuenta ya está activada</h2><p>Ya hemos sincronizado el portal de la chapa <strong>${row.chapa}</strong>.</p><p>Puedes entrar en App CPE y consultar tus datos.</p>`
-        });
-        await appCpe.from('app_cpe_activation_email_outbox').update(emailError
-            ? { status: 'failed', attempts: row.attempts + 1, last_error: 'Resend rechazó el correo' }
-            : { status: 'sent', attempts: row.attempts + 1, last_error: null, sent_at: new Date().toISOString() }).eq('id', row.id);
-        if (!emailError) sent += 1;
+        };
+        try {
+            const provider = await deliverActivationEmail({ resend, message });
+            await appCpe.from('app_cpe_activation_email_outbox').update({
+                status: 'sent',
+                attempts: row.attempts + 1,
+                last_error: null,
+                sent_at: new Date().toISOString()
+            }).eq('id', row.id);
+            console.log(`Correo de activación ${row.id} enviado mediante ${provider}`);
+            sent += 1;
+        } catch (emailError) {
+            const lastError = emailErrorMessage(emailError);
+            console.error(`No se pudo enviar el correo de activación ${row.id}: ${lastError}`);
+            await appCpe.from('app_cpe_activation_email_outbox').update({
+                status: 'failed',
+                attempts: row.attempts + 1,
+                last_error: lastError
+            }).eq('id', row.id);
+            failed += 1;
+        }
     }
-    return res.status(200).json({ ok: true, sent });
+    return res.status(200).json({ ok: true, sent, failed });
 }
 
 // Configurar VAPID
