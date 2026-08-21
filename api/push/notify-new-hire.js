@@ -41,7 +41,6 @@ async function sendAppCpeActivationEmails(res) {
         if (!claimed) continue;
         const admin = row.kind === 'admin_pending';
         const message = {
-            from: process.env.RESEND_FROM_EMAIL || 'Portal Estiba VLC <onboarding@resend.dev>',
             to: row.recipient,
             subject: admin ? `Nuevo usuario pendiente: chapa ${row.chapa}` : 'Tu cuenta de App CPE ya está activada',
             html: admin
