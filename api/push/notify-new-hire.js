@@ -13,26 +13,33 @@ function emailErrorMessage(error) {
 }
 
 async function deliverActivationEmail({ resend, message }) {
-    const { error } = await resend.emails.send(message);
-    if (!error) return 'resend';
-
-    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-        throw new Error(`Resend: ${emailErrorMessage(error)}`);
+    if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+        const gmail = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.GMAIL_USER,
+                pass: process.env.GMAIL_APP_PASSWORD
+            }
+        });
+        try {
+            await gmail.sendMail({
+                ...message,
+                from: `Portal Estiba VLC <${process.env.GMAIL_USER}>`
+            });
+            return 'gmail';
+        } catch (gmailError) {
+            const { error: resendError } = await resend.emails.send(message);
+            if (!resendError) {
+                console.warn(`Gmail rechazó el correo; enviado mediante Resend: ${emailErrorMessage(gmailError)}`);
+                return 'resend';
+            }
+            throw new Error(`Gmail: ${emailErrorMessage(gmailError)}; Resend: ${emailErrorMessage(resendError)}`);
+        }
     }
 
-    const gmail = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-            user: process.env.GMAIL_USER,
-            pass: process.env.GMAIL_APP_PASSWORD
-        }
-    });
-    await gmail.sendMail({
-        ...message,
-        from: `Portal Estiba VLC <${process.env.GMAIL_USER}>`
-    });
-    console.warn(`Resend rechazó el correo; enviado mediante Gmail: ${emailErrorMessage(error)}`);
-    return 'gmail';
+    const { error } = await resend.emails.send(message);
+    if (!error) return 'resend';
+    throw new Error(`Resend: ${emailErrorMessage(error)}`);
 }
 
 async function sendAppCpeActivationEmails(res) {
