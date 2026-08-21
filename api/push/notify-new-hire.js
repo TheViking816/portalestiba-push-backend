@@ -1,7 +1,6 @@
 // api/push/notify-new-hire.js
 const webpush = require('web-push');
 const { createClient } = require('@supabase/supabase-js');
-const { Resend } = require('resend');
 const nodemailer = require('nodemailer');
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -12,39 +11,27 @@ function emailErrorMessage(error) {
     return String(error?.message || error?.name || 'Error desconocido').slice(0, 500);
 }
 
-async function deliverActivationEmail({ resend, message }) {
-    if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
-        const gmail = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.GMAIL_USER,
-                pass: process.env.GMAIL_APP_PASSWORD
-            }
-        });
-        try {
-            await gmail.sendMail({
-                ...message,
-                from: `Portal Estiba VLC <${process.env.GMAIL_USER}>`
-            });
-            return 'gmail';
-        } catch (gmailError) {
-            const { error: resendError } = await resend.emails.send(message);
-            if (!resendError) {
-                console.warn(`Gmail rechazó el correo; enviado mediante Resend: ${emailErrorMessage(gmailError)}`);
-                return 'resend';
-            }
-            throw new Error(`Gmail: ${emailErrorMessage(gmailError)}; Resend: ${emailErrorMessage(resendError)}`);
-        }
+async function deliverActivationEmail({ message }) {
+    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+        throw new Error('Gmail de Portal Estiba VLC no está configurado');
     }
 
-    const { error } = await resend.emails.send(message);
-    if (!error) return 'resend';
-    throw new Error(`Resend: ${emailErrorMessage(error)}`);
+    const gmail = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+            user: process.env.GMAIL_USER,
+            pass: process.env.GMAIL_APP_PASSWORD
+        }
+    });
+    await gmail.sendMail({
+        ...message,
+        from: `Portal Estiba VLC <${process.env.GMAIL_USER}>`
+    });
+    return 'gmail';
 }
 
 async function sendAppCpeActivationEmails(res) {
     const appCpe = createClient(process.env.APP_CPE_SUPABASE_URL, process.env.APP_CPE_SUPABASE_SERVICE_ROLE, { auth: { persistSession: false } });
-    const resend = new Resend(process.env.RESEND_API_KEY);
     const { data: rows, error } = await appCpe.from('app_cpe_activation_email_outbox').select('id,kind,recipient,chapa,attempts,status').in('status', ['pending', 'failed']).lt('attempts', 5).order('created_at').limit(20);
     if (error) return res.status(500).json({ ok: false });
     let sent = 0;
@@ -62,7 +49,7 @@ async function sendAppCpeActivationEmails(res) {
                 : `<h2>Tu cuenta ya está activada</h2><p>Ya hemos sincronizado el portal de la chapa <strong>${row.chapa}</strong>.</p><p>Puedes entrar en App CPE y consultar tus datos.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p>`
         };
         try {
-            const provider = await deliverActivationEmail({ resend, message });
+            const provider = await deliverActivationEmail({ message });
             await appCpe.from('app_cpe_activation_email_outbox').update({
                 status: 'sent',
                 attempts: row.attempts + 1,
@@ -108,7 +95,7 @@ module.exports = async (req, res) => {
 
     try {
         if (req.body?.app_cpe_activation_emails === true) {
-            if (!process.env.APP_CPE_SUPABASE_URL || !process.env.APP_CPE_SUPABASE_SERVICE_ROLE || !process.env.RESEND_API_KEY) {
+            if (!process.env.APP_CPE_SUPABASE_URL || !process.env.APP_CPE_SUPABASE_SERVICE_ROLE || !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
                 return res.status(503).json({ ok: false, configured: false });
             }
             return await sendAppCpeActivationEmails(res);
