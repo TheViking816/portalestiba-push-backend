@@ -52,7 +52,7 @@ async function sendAppCpeActivationEmails(res) {
                 ? `<h2>Nuevo usuario pendiente</h2><p>La chapa <strong>${row.chapa}</strong> ha guardado sus claves del portal.</p><p>Pasa Cloudflare y ejecuta <strong>Actualizar pendientes App CPE</strong>.</p>`
                 : rejectedCredentials
                     ? `<h2>Revisa tus claves del Portal de SEVASA</h2><p>No se han podido cargar tus datos en App CPE porque el Portal de SEVASA ha rechazado las credenciales guardadas.</p><p>Entra de nuevo en App CPE y vuelve a introducir:</p><ul><li>Tu chapa como usuario.</li><li>La contraseña que utilizas para acceder al Portal de SEVASA.</li><li>Tu clave de seguridad, si corresponde.</li></ul><p>Asegúrate de introducir las claves del <strong>Portal de SEVASA</strong>, no la contraseña de acceso a App CPE.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p><p>Gracias.</p>`
-                : `<h2>Tu cuenta ya está activada</h2><p>Tu cuenta ya está activada.</p><p>Puedes entrar en App CPE y consultar tus datos.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p>`
+                : `<h2>Tu cuenta ya está activada</h2><p>Puedes entrar en App CPE y consultar tus datos.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p>`
         };
         try {
             const provider = await deliverActivationEmail({ message });
