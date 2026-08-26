@@ -4,12 +4,15 @@ const Module = require('node:module');
 
 let premiumResult = { data: null, error: null };
 let subscriptionResult = { data: [] };
+let subscriptionResultsByCustomer = null;
 let openSessionResult = { data: [] };
 let checkoutCreateCalls = 0;
+let metadataCustomers = [];
+let emailCustomers = [];
 
 const fakeStripe = {
   subscriptions: {
-    list: async () => subscriptionResult
+    list: async ({ customer }) => subscriptionResultsByCustomer?.[customer] || subscriptionResult
   },
   checkout: {
     sessions: {
@@ -26,7 +29,9 @@ const fakeStripe = {
     }
   },
   customers: {
-    search: async () => ({ data: [] }),
+    search: async ({ query }) => ({
+      data: query.startsWith('email:') ? emailCustomers : metadataCustomers
+    }),
     create: async () => ({ id: 'cus_test' })
   }
 };
@@ -59,7 +64,7 @@ Module._load = function mockExternalModules(request, parent, isMain) {
 };
 
 const checkoutHandler = require('../api/create-checkout-session');
-const { normalizeChapa, hasBlockingSubscription } = checkoutHandler._test;
+const { normalizeChapa, hasBlockingSubscription, escapeStripeSearchValue } = checkoutHandler._test;
 Module._load = originalLoad;
 
 function createResponse() {
@@ -88,6 +93,10 @@ test('normaliza chapas validas y rechaza entradas manipuladas', () => {
   assert.equal(normalizeChapa('735x'), null);
 });
 
+test('escapa valores usados en busquedas de Stripe', () => {
+  assert.equal(escapeStripeSearchValue("o'hara\\test"), "o\\'hara\\\\test");
+});
+
 test('bloquea cualquier suscripcion que todavia pueda cobrar o completarse', () => {
   for (const status of ['active', 'trialing', 'past_due', 'unpaid', 'incomplete', 'paused']) {
     assert.equal(hasBlockingSubscription([{ status }]), true, status);
@@ -107,6 +116,9 @@ test('una suscripcion existente abre el portal y nunca crea otro checkout', asyn
   };
   subscriptionResult = { data: [{ id: 'sub_existing', status: 'active' }] };
   openSessionResult = { data: [] };
+  subscriptionResultsByCustomer = null;
+  metadataCustomers = [];
+  emailCustomers = [];
   checkoutCreateCalls = 0;
 
   const res = createResponse();
@@ -121,6 +133,9 @@ test('una suscripcion existente abre el portal y nunca crea otro checkout', asyn
 test('si Supabase falla, el checkout falla cerrado y no duplica', async () => {
   premiumResult = { data: null, error: { message: 'timeout' } };
   subscriptionResult = { data: [] };
+  subscriptionResultsByCustomer = null;
+  metadataCustomers = [];
+  emailCustomers = [];
   checkoutCreateCalls = 0;
 
   const res = createResponse();
@@ -136,6 +151,48 @@ test('una suscripcion terminada permite checkout reutilizando el cliente', async
     error: null
   };
   subscriptionResult = { data: [{ id: 'sub_old', status: 'canceled' }] };
+  subscriptionResultsByCustomer = null;
+  metadataCustomers = [];
+  emailCustomers = [];
+  openSessionResult = { data: [] };
+  checkoutCreateCalls = 0;
+
+  const res = createResponse();
+  await checkoutHandler(createRequest(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.url, 'https://checkout.stripe.test/session');
+  assert.equal(checkoutCreateCalls, 1);
+});
+
+test('bloquea una suscripcion activa encontrada en otra ficha con el mismo email', async () => {
+  premiumResult = { data: null, error: null };
+  subscriptionResult = { data: [] };
+  subscriptionResultsByCustomer = {
+    cus_duplicate: { data: [{ id: 'sub_duplicate', status: 'active' }] }
+  };
+  metadataCustomers = [];
+  emailCustomers = [{ id: 'cus_duplicate', email: 'test@example.com' }];
+  openSessionResult = { data: [] };
+  checkoutCreateCalls = 0;
+
+  const res = createResponse();
+  await checkoutHandler(createRequest(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.alreadyActive, true);
+  assert.equal(res.body.reason, 'subscription_exists');
+  assert.equal(checkoutCreateCalls, 0);
+});
+
+test('reutiliza una ficha por email cuando sus suscripciones anteriores terminaron', async () => {
+  premiumResult = { data: null, error: null };
+  subscriptionResult = { data: [] };
+  subscriptionResultsByCustomer = {
+    cus_reusable: { data: [{ id: 'sub_canceled', status: 'canceled' }] }
+  };
+  metadataCustomers = [];
+  emailCustomers = [{ id: 'cus_reusable', email: 'test@example.com' }];
   openSessionResult = { data: [] };
   checkoutCreateCalls = 0;
 

@@ -20,6 +20,18 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+const ACCESS_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing']);
+
+function escapeStripeSearchValue(value) {
+  return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function oldestAccessSubscription(subscriptions) {
+  return subscriptions
+    .filter(subscription => ACCESS_SUBSCRIPTION_STATUSES.has(subscription.status))
+    .sort((a, b) => (a.created || 0) - (b.created || 0))[0] || null;
+}
+
 async function getRawBody(req) {
   if (req.rawBody && Buffer.isBuffer(req.rawBody)) {
     return req.rawBody;
@@ -161,6 +173,16 @@ async function handleSubscriptionCanceled(subscription) {
     return;
   }
 
+  // Una chapa antigua puede tener varias fichas de cliente en Stripe. Antes de
+  // revocar Premium, busca otra suscripcion activa por chapa o por email y
+  // conserva la mas antigua. Esto evita que cancelar un duplicado quite acceso.
+  const replacement = await findActiveReplacementSubscription(chapa, freshSubscription);
+  if (replacement) {
+    await updateUserPremium(chapa, replacement);
+    console.log('Usuario premium conserva otra suscripcion activa:', chapa, replacement.id);
+    return;
+  }
+
   await supabase.rpc('actualizar_suscripcion_desde_webhook', {
     p_chapa: chapa,
     p_stripe_customer_id: freshSubscription.customer,
@@ -172,6 +194,57 @@ async function handleSubscriptionCanceled(subscription) {
   });
 
   console.log('Usuario premium actualizado (cancelado):', chapa);
+}
+
+async function findActiveReplacementSubscription(chapa, canceledSubscription) {
+  const customerIds = new Set();
+  if (canceledSubscription.customer) customerIds.add(canceledSubscription.customer);
+
+  const { data: usuario, error: usuarioError } = await supabase
+    .from('usuarios')
+    .select('email')
+    .eq('chapa', chapa)
+    .limit(1)
+    .maybeSingle();
+
+  if (usuarioError) throw usuarioError;
+
+  let email = usuario?.email || null;
+  if (canceledSubscription.customer) {
+    const canceledCustomer = await stripe.customers.retrieve(canceledSubscription.customer);
+    if (!canceledCustomer.deleted && canceledCustomer.email) email ||= canceledCustomer.email;
+  }
+
+  const searches = [
+    stripe.customers.search({
+      query: `metadata['chapa']:'${escapeStripeSearchValue(chapa)}'`,
+      limit: 100
+    })
+  ];
+  if (email) {
+    searches.push(stripe.customers.search({
+      query: `email:'${escapeStripeSearchValue(email.toLowerCase())}'`,
+      limit: 100
+    }));
+  }
+
+  for (const result of await Promise.all(searches)) {
+    for (const customer of result.data) {
+      if (!customer.deleted) customerIds.add(customer.id);
+    }
+  }
+
+  const candidates = [];
+  for (const customer of customerIds) {
+    const subscriptions = await stripe.subscriptions.list({
+      customer,
+      status: 'all',
+      limit: 100
+    });
+    candidates.push(...subscriptions.data.filter(item => item.id !== canceledSubscription.id));
+  }
+
+  return oldestAccessSubscription(candidates);
 }
 
 /**
@@ -274,3 +347,8 @@ async function updateUserPremium(chapa, subscription) {
 
   console.log('✅ Usuario premium actualizado en Supabase:', chapa);
 }
+
+module.exports._test = {
+  escapeStripeSearchValue,
+  oldestAccessSubscription
+};

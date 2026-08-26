@@ -35,6 +35,10 @@ function getFrontendUrl() {
   return (process.env.FRONTEND_URL || OFFICIAL_ORIGIN).replace(/\/+$/, '');
 }
 
+function escapeStripeSearchValue(value) {
+  return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 async function createPortalResponse(res, customerId, reason) {
   const portalSession = await stripe.billingPortal.sessions.create({
     customer: customerId,
@@ -48,28 +52,48 @@ async function createPortalResponse(res, customerId, reason) {
   });
 }
 
-async function findOrCreateCustomer(chapa) {
-  const escapedChapa = chapa.replace(/'/g, "\\'");
-  const existingCustomers = await stripe.customers.search({
-    query: `metadata['chapa']:'${escapedChapa}'`,
-    limit: 1
-  });
+async function findExistingCustomers(chapa, email) {
+  const searches = [
+    stripe.customers.search({
+      query: `metadata['chapa']:'${escapeStripeSearchValue(chapa)}'`,
+      limit: 100
+    })
+  ];
 
-  if (existingCustomers.data.length > 0) {
-    return existingCustomers.data[0];
+  if (email) {
+    searches.push(stripe.customers.search({
+      query: `email:'${escapeStripeSearchValue(email.toLowerCase())}'`,
+      limit: 100
+    }));
   }
 
-  const { data: usuario, error } = await supabase
-    .from('usuarios')
-    .select('email, nombre')
-    .eq('chapa', chapa)
-    .limit(1)
-    .maybeSingle();
+  const results = await Promise.all(searches);
+  const customersById = new Map();
 
-  if (error) {
-    throw new Error(`No se pudo consultar el usuario: ${error.message}`);
+  for (const result of results) {
+    for (const customer of result.data) {
+      if (!customer.deleted) customersById.set(customer.id, customer);
+    }
   }
 
+  return [...customersById.values()];
+}
+
+async function findBlockingCustomer(customerIds) {
+  for (const customerId of customerIds) {
+    const subscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: 'all',
+      limit: 100
+    });
+
+    if (hasBlockingSubscription(subscriptions.data)) return customerId;
+  }
+
+  return null;
+}
+
+async function createCustomer(chapa, usuario) {
   const customerParams = {
     metadata: { chapa }
   };
@@ -139,21 +163,36 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    let customerId = premiumUser?.stripe_customer_id || null;
+    const { data: usuario, error: usuarioError } = await supabase
+      .from('usuarios')
+      .select('email, nombre')
+      .eq('chapa', chapa)
+      .limit(1)
+      .maybeSingle();
+
+    if (usuarioError) {
+      console.error('No se pudo consultar usuarios:', usuarioError.message);
+      return res.status(503).json({
+        error: 'No se ha podido verificar tu cuenta. Intentalo de nuevo en unos minutos.'
+      });
+    }
+
+    const existingCustomers = await findExistingCustomers(chapa, usuario?.email);
+    const customerIds = new Set(existingCustomers.map(customer => customer.id));
+    if (premiumUser?.stripe_customer_id) customerIds.add(premiumUser.stripe_customer_id);
+
+    const blockingCustomerId = await findBlockingCustomer(customerIds);
+    if (blockingCustomerId) {
+      return createPortalResponse(res, blockingCustomerId, 'subscription_exists');
+    }
+
+    let customerId = premiumUser?.stripe_customer_id
+      || existingCustomers[0]?.id
+      || null;
 
     if (customerId) {
-      const subscriptions = await stripe.subscriptions.list({
-        customer: customerId,
-        status: 'all',
-        limit: 100
-      });
-
-      if (hasBlockingSubscription(subscriptions.data)) {
-        return createPortalResponse(res, customerId, 'subscription_exists');
-      }
-
-      const estado = String(premiumUser.estado || '').toLowerCase();
-      const periodoFin = premiumUser.periodo_fin
+      const estado = String(premiumUser?.estado || '').toLowerCase();
+      const periodoFin = premiumUser?.periodo_fin
         ? new Date(premiumUser.periodo_fin)
         : null;
       const premiumVigente = ['active', 'trialing'].includes(estado)
@@ -169,7 +208,7 @@ module.exports = async function handler(req, res) {
     }
 
     if (!customerId) {
-      const customer = await findOrCreateCustomer(chapa);
+      const customer = await createCustomer(chapa, usuario);
       customerId = customer.id;
     }
 
@@ -201,7 +240,6 @@ module.exports = async function handler(req, res) {
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer: customerId,
-      payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${getFrontendUrl()}/?success=true&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${getFrontendUrl()}/pricing.html?canceled=true`,
@@ -225,5 +263,6 @@ module.exports = async function handler(req, res) {
 
 module.exports._test = {
   normalizeChapa,
-  hasBlockingSubscription
+  hasBlockingSubscription,
+  escapeStripeSearchValue
 };
