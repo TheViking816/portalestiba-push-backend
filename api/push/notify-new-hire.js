@@ -41,14 +41,17 @@ async function sendAppCpeActivationEmails(res) {
         if (!claimed) continue;
         const admin = row.kind === 'admin_pending';
         const rejectedCredentials = row.kind === 'portal_credentials_rejected';
+        const premiumsReady = row.kind === 'premium_history_ready';
         const message = {
             to: row.recipient,
-            subject: admin
+            subject: premiumsReady ? 'Tus primas y nóminas ya están disponibles' : admin
                 ? `Nuevo usuario pendiente: chapa ${row.chapa}`
                 : rejectedCredentials
                     ? 'Revisa tus claves del Portal de SEVASA'
                     : 'Tu cuenta de App CPE ya está activada',
-            html: admin
+            html: premiumsReady
+                ? '<h2>Tus primas y nóminas ya están disponibles</h2><p>Se han cargado tus primas y nóminas disponibles del año actual. Ya puedes consultarlas en App CPE.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p>'
+                : admin
                 ? `<h2>Nuevo usuario pendiente</h2><p>La chapa <strong>${row.chapa}</strong> ha guardado sus claves del portal.</p><p>Pasa Cloudflare y ejecuta <strong>Actualizar pendientes App CPE</strong>.</p>`
                 : rejectedCredentials
                     ? `<h2>Revisa tus claves del Portal de SEVASA</h2><p>No se han podido cargar tus datos en App CPE porque el Portal de SEVASA ha rechazado las credenciales guardadas.</p><p>Entra de nuevo en App CPE y vuelve a introducir:</p><ul><li>Tu chapa como usuario.</li><li>La contraseña que utilizas para acceder al Portal de SEVASA.</li><li>Tu clave de seguridad, si corresponde.</li></ul><p>Asegúrate de introducir las claves del <strong>Portal de SEVASA</strong>, no la contraseña de acceso a App CPE.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p><p>Gracias.</p>`
