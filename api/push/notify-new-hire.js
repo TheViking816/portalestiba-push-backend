@@ -42,14 +42,17 @@ async function sendAppCpeActivationEmails(res) {
         const admin = row.kind === 'admin_pending';
         const rejectedCredentials = row.kind === 'portal_credentials_rejected';
         const premiumsReady = row.kind === 'premium_history_ready';
+        const adminSecurityKey = row.kind === 'admin_security_key_added';
         const message = {
             to: row.recipient,
-            subject: premiumsReady ? 'Tus primas y nóminas ya están disponibles' : admin
+            subject: adminSecurityKey ? `Clave de primas añadida: chapa ${row.chapa}` : premiumsReady ? 'Tus primas y nóminas ya están disponibles' : admin
                 ? `Nuevo usuario pendiente: chapa ${row.chapa}`
                 : rejectedCredentials
                     ? 'Revisa tus claves del Portal de SEVASA'
                     : 'Tu cuenta de App CPE ya está activada',
-            html: premiumsReady
+            html: adminSecurityKey
+                ? `<h2>Clave de primas añadida</h2><p>La chapa <strong>${row.chapa}</strong> ha añadido su clave de primas.</p><p>Ya tiene una carga completa del historial pendiente. Ejecuta <strong>Actualizar pendientes App CPE</strong>.</p>`
+                : premiumsReady
                 ? '<h2>Tus primas y nóminas ya están disponibles</h2><p>Se han cargado tus primas y nóminas disponibles del año actual. Ya puedes consultarlas en App CPE.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p>'
                 : admin
                 ? `<h2>Nuevo usuario pendiente</h2><p>La chapa <strong>${row.chapa}</strong> ha guardado sus claves del portal.</p><p>Pasa Cloudflare y ejecuta <strong>Actualizar pendientes App CPE</strong>.</p>`
