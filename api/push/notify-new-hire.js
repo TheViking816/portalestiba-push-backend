@@ -61,6 +61,14 @@ async function sendAppCpeActivationEmails(res) {
                 : `<h2>Tu cuenta ya está activada</h2><p>Puedes entrar en App CPE y consultar tus datos.</p><p><a href="https://cpe-app-flax.vercel.app">Abrir App CPE</a></p>`
         };
         try {
+            if (row.kind === 'user_activated') {
+                const { data: config, error: configError } = await appCpe.from('app_cpe_portal_auto_sync')
+                    .select('security_key_secret_id').eq('chapa', row.chapa).maybeSingle();
+                if (configError) throw new Error('No se pudo comprobar si falta la clave de seguridad');
+                if (config && config.security_key_secret_id === null) {
+                    message.html = message.html.replace('<p><a href=', '<p>Todavía no se han cargado tus primas ni tus nóminas. Si quieres consultarlas, añade en App CPE tu clave de seguridad del Portal de SEVASA. En la próxima sincronización se cargarán tus primas y nóminas.</p><p><a href=');
+                }
+            }
             const provider = await deliverActivationEmail({ message });
             await appCpe.from('app_cpe_activation_email_outbox').update({
                 status: 'sent',
