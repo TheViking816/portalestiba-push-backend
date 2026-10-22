@@ -2,6 +2,7 @@
 const webpush = require('web-push');
 const { createClient } = require('@supabase/supabase-js');
 const nodemailer = require('nodemailer');
+const { portalLinkRequestEmail } = require('../../lib/portal-link-request-email');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -43,7 +44,7 @@ async function sendAppCpeActivationEmails(res) {
         const rejectedCredentials = row.kind === 'portal_credentials_rejected';
         const premiumsReady = row.kind === 'premium_history_ready';
         const adminSecurityKey = row.kind === 'admin_security_key_added';
-        const message = {
+        const message = portalLinkRequestEmail(row) || {
             to: row.recipient,
             subject: adminSecurityKey ? `Clave de primas añadida: chapa ${row.chapa}` : premiumsReady ? 'Tus primas y nóminas ya están disponibles' : admin
                 ? `Nuevo usuario pendiente: chapa ${row.chapa}`
