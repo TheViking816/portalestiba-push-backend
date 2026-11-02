@@ -12,6 +12,31 @@ function emailErrorMessage(error) {
     return String(error?.message || error?.name || 'Error desconocido').slice(0, 500);
 }
 
+function journalKey(id) {
+    let hash = 5381;
+    for (const character of `id:${id}`) hash = ((hash << 5) + hash) ^ character.charCodeAt(0);
+    return (hash >>> 0).toString(36);
+}
+
+async function journalTarget(chapa, body) {
+    const parts = String(body || '').split(' - ');
+    if (!chapa || parts.length < 2) return null;
+    const dateMatch = parts[1].match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!dateMatch) return null;
+    const date = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+    const { data, error } = await supabase.from('jornales')
+        .select('id,puesto,empresa,buque').eq('chapa', String(chapa))
+        .eq('fecha', date).eq('jornada', parts[0]).limit(20);
+    if (error) throw error;
+    const rows = data || [];
+    const exact = rows.filter(row =>
+        (!parts[2] || row.puesto === parts[2]) &&
+        (!parts[3] || row.empresa === parts[3]) &&
+        (!parts[4] || row.buque === parts[4]));
+    const match = exact.length === 1 ? exact[0] : rows.length === 1 ? rows[0] : null;
+    return match?.id ? journalKey(match.id) : null;
+}
+
 async function deliverActivationEmail({ message }) {
     if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
         throw new Error('Gmail de Portal Estiba VLC no está configurado');
@@ -126,9 +151,9 @@ module.exports = async (req, res) => {
         console.log(`📨 Notificación nueva contratación para chapa: ${chapa_target || 'TODOS'}`);
 
         // Obtener suscripciones de la tabla push_subscriptions
-        let { data: subscriptions, error } = await supabase
-            .from('push_subscriptions')
-            .select('*');
+        let subscriptionsQuery = supabase.from('push_subscriptions').select('*');
+        if (chapa_target) subscriptionsQuery = subscriptionsQuery.eq('user_chapa', String(chapa_target));
+        let { data: subscriptions, error } = await subscriptionsQuery;
 
         if (error) {
             console.error('Error obteniendo suscripciones:', error);
@@ -151,13 +176,21 @@ module.exports = async (req, res) => {
             }
         }
 
+        let target = null;
+        try { target = await journalTarget(chapa_target, body); }
+        catch (lookupError) { console.warn('No se pudo localizar el parte concreto:', lookupError.message); }
+        const notificationUrl = target
+            ? `/?page=contratacion&type=journal&target=${encodeURIComponent(target)}`
+            : (url || '/?page=contratacion');
         const payload = JSON.stringify({
             title: title || '¡Nueva Contratación!',
             body: body || 'Hay una nueva contratación disponible',
-            icon: '/icon-192.png',
-            badge: '/icon-192.png',
+            icon: 'https://portal-estiba-vlc.vercel.app/assets/loho.jpg',
+            badge: 'https://portal-estiba-vlc.vercel.app/assets/loho.jpg',
             data: {
-                url: url || '/contratacion'
+                url: notificationUrl,
+                target,
+                type: target ? 'journal' : null
             }
         });
 
